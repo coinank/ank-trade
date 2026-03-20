@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Coinank Trader",
+  "version": "1.0.0",
+  "description": "快速加密货币交易助手 - 支持 Binance OKX Bybit Bitget Hyperliquid",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://api.binance.com/*",
+    "https://api1.binance.com/*",
+    "https://fapi.binance.com/*",
+    "https://www.okx.com/*",
+    "https://api.bybit.com/*",
+    "https://api.bitget.com/*",
+    "https://api.hyperliquid.xyz/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
