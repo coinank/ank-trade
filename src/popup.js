@@ -1,3 +1,5 @@
+import { initLang, t, langLabel, cycleLang } from './i18n.js';
+
 // ─── 状态 ────────────────────────────────────────────────────────────────────
 const state = {
   exchange:       'binance',
@@ -26,16 +28,18 @@ const state = {
 
 const EXCHANGES = ['binance', 'okx', 'bybit', 'bitget', 'hyperliquid'];
 const EX_LABEL  = { binance: 'Binance', okx: 'OKX', bybit: 'Bybit', bitget: 'Bitget', hyperliquid: 'Hyperliquid' };
-const STATUS_ZH = {
-  new: '挂单中', open: '挂单中', live: '挂单中',
-  partially_filled: '部分成交', filled: '已成交',
-  canceled: '已撤销', cancelled: '已撤销',
-  rejected: '已拒绝', triggered: '已触发',
+
+const STATUS_KEY = {
+  new: 'status_new', open: 'status_new', live: 'status_new',
+  partially_filled: 'status_partial', filled: 'status_filled',
+  canceled: 'status_canceled', cancelled: 'status_canceled',
+  rejected: 'status_rejected', triggered: 'status_triggered',
 };
-const TYPE_ZH = {
-  market: '市价', limit: '限价', stop: '止损', takeprofit: '止盈',
-  conditional: '条件单', take_profit: '止盈', take_profit_market: '止盈',
+const TYPE_KEY = {
+  market: 'type_market', limit: 'type_limit', stop: 'type_stop', takeprofit: 'type_takeprofit',
+  conditional: 'type_conditional', take_profit: 'type_take_profit', take_profit_market: 'type_tp_market',
 };
+
 // 公开接口（不需要 API Key）
 const PUBLIC_ACTIONS = new Set(['getMarkets', 'getTicker']);
 
@@ -45,6 +49,7 @@ let _balanceTimer = null;
 
 // ─── 初始化 ──────────────────────────────────────────────────────────────────
 async function init() {
+  await initLang();
   const s = await chrome.storage.local.get(['selectedExchange', 'lastSymbol', 'lastMarket', 'coinankSymbol']);
   if (s.selectedExchange) state.exchange   = s.selectedExchange;
   if (s.lastSymbol)       state.symbol     = s.lastSymbol;
@@ -96,17 +101,17 @@ function render() {
 function updatePriceBar() {
   const bar = q('.price-bar');
   if (!bar) return;
-  const t   = state.ticker;
-  const chg = t?.change;
+  const tk  = state.ticker;
+  const chg = tk?.change;
   const chgClass = chg != null ? (chg >= 0 ? 'chg-up' : 'chg-down') : '';
   const chgStr   = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
   bar.innerHTML = `
     <span class="price-bar-sym">${state.symbol}</span>
-    ${t ? `
-    <span class="price-bar-price">${fmtPrice(t.last)}</span>
+    ${tk ? `
+    <span class="price-bar-price">${fmtPrice(tk.last)}</span>
     <span class="price-bar-change ${chgClass}">${chgStr}</span>
-    <span class="price-bar-spread">${fmtPrice(t.bid)} / ${fmtPrice(t.ask)}</span>
-    ` : '<span class="price-bar-loading">行情加载中...</span>'}
+    <span class="price-bar-spread">${fmtPrice(tk.bid)} / ${fmtPrice(tk.ask)}</span>
+    ` : `<span class="price-bar-loading">${t('loading_ticker')}</span>`}
   `;
 }
 
@@ -145,8 +150,8 @@ function html() {
 }
 
 function header() {
-  const t   = state.ticker;
-  const chg = t?.change;
+  const tk  = state.ticker;
+  const chg = tk?.change;
   const chgClass = chg != null ? (chg >= 0 ? 'chg-up' : 'chg-down') : '';
   const chgStr   = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
   return `
@@ -156,16 +161,17 @@ function header() {
     <select class="exchange-select" id="exSel">
       ${EXCHANGES.map(e => `<option value="${e}"${state.exchange===e?' selected':''}>${EX_LABEL[e]}</option>`).join('')}
     </select>
-    <button class="btn-icon" id="settingsBtn" title="设置">⚙</button>
+    <button class="btn-icon btn-lang" id="langBtn">${langLabel()}</button>
+    <button class="btn-icon" id="settingsBtn" title="${t('settings')}">⚙</button>
   </div>
 </header>
 <div class="price-bar">
   <span class="price-bar-sym">${state.symbol}</span>
-  ${t ? `
-  <span class="price-bar-price">${fmtPrice(t.last)}</span>
+  ${tk ? `
+  <span class="price-bar-price">${fmtPrice(tk.last)}</span>
   <span class="price-bar-change ${chgClass}">${chgStr}</span>
-  <span class="price-bar-spread">${fmtPrice(t.bid)} / ${fmtPrice(t.ask)}</span>
-  ` : '<span class="price-bar-loading">行情加载中...</span>'}
+  <span class="price-bar-spread">${fmtPrice(tk.bid)} / ${fmtPrice(tk.ask)}</span>
+  ` : `<span class="price-bar-loading">${t('loading_ticker')}</span>`}
 </div>`;
 }
 
@@ -173,11 +179,11 @@ function tabs() {
   const isHL = state.exchange === 'hyperliquid';
   return `
 <div class="tabs">
-  <button class="tab${state.tab==='trade'?' active':''}" data-tab="trade">交易</button>
-  <button class="tab${state.tab==='orders'?' active':''}" data-tab="orders">订单</button>
+  <button class="tab${state.tab==='trade'?' active':''}" data-tab="trade">${t('tab_trade')}</button>
+  <button class="tab${state.tab==='orders'?' active':''}" data-tab="orders">${t('tab_orders')}</button>
   <div class="market-toggle">
-    <button class="toggle-btn${state.marketType==='spot'?' active':''}" data-mkt="spot"${isHL?' disabled':''}>现货</button>
-    <button class="toggle-btn${state.marketType==='perp'?' active':''}" data-mkt="perp">合约</button>
+    <button class="toggle-btn${state.marketType==='spot'?' active':''}" data-mkt="spot"${isHL?' disabled':''}>${t('market_spot')}</button>
+    <button class="toggle-btn${state.marketType==='perp'?' active':''}" data-mkt="perp">${t('market_perp')}</button>
   </div>
 </div>`;
 }
@@ -194,13 +200,13 @@ function tradeForm() {
 
   <!-- 交易对选择 -->
   <div class="form-group">
-    <label>交易对</label>
+    <label>${t('label_symbol')}</label>
     <div class="sym-picker">
       <div class="sym-input-row">
         <input class="input" id="symSearch" type="text"
           value="${state.symbol}"
-          placeholder="搜索交易对" autocomplete="off">
-        <button class="btn-sym-refresh" id="symRefreshBtn" title="刷新交易对">↻</button>
+          placeholder="${t('search_symbol')}" autocomplete="off">
+        <button class="btn-sym-refresh" id="symRefreshBtn" title="${t('refresh_symbol')}">↻</button>
       </div>
       <div id="symDropdownContainer"></div>
     </div>
@@ -208,24 +214,24 @@ function tradeForm() {
 
   <!-- 买卖方向 -->
   <div class="side-selector">
-    <button class="side-btn buy${state.side==='buy'?' active':''}" data-side="buy">买入 / Long</button>
-    <button class="side-btn sell${state.side==='sell'?' active':''}" data-side="sell">卖出 / Short</button>
+    <button class="side-btn buy${state.side==='buy'?' active':''}" data-side="buy">${t('btn_buy')}</button>
+    <button class="side-btn sell${state.side==='sell'?' active':''}" data-side="sell">${t('btn_sell')}</button>
   </div>
 
   <!-- 订单类型 -->
   <div class="form-group">
-    <label>订单类型</label>
+    <label>${t('label_order_type')}</label>
     <div class="order-type-tabs">
-      <button class="type-btn${state.orderType==='market'?' active':''}"     data-ot="market">市价</button>
-      <button class="type-btn${state.orderType==='limit'?' active':''}"      data-ot="limit">限价</button>
-      <button class="type-btn${state.orderType==='stop'?' active':''}"       data-ot="stop">止损</button>
-      <button class="type-btn${state.orderType==='takeprofit'?' active':''}" data-ot="takeprofit">止盈</button>
+      <button class="type-btn${state.orderType==='market'?' active':''}"     data-ot="market">${t('type_market')}</button>
+      <button class="type-btn${state.orderType==='limit'?' active':''}"      data-ot="limit">${t('type_limit')}</button>
+      <button class="type-btn${state.orderType==='stop'?' active':''}"       data-ot="stop">${t('type_stop')}</button>
+      <button class="type-btn${state.orderType==='takeprofit'?' active':''}" data-ot="takeprofit">${t('type_takeprofit')}</button>
     </div>
   </div>
 
   <!-- 数量 -->
   <div class="form-group">
-    <label>数量</label>
+    <label>${t('label_amount')}</label>
     <div class="input-wrap">
       <input class="input" id="amtIn" type="number" value="${state.amount}" placeholder="0.000" min="0" step="any">
       <span class="input-suffix">${base}</span>
@@ -236,18 +242,18 @@ function tradeForm() {
   <!-- 价格（限价/止损/止盈） -->
   ${showPx ? `
   <div class="form-group">
-    <label>${state.orderType==='stop'?'委托价格':state.orderType==='takeprofit'?'委托价格':'价格'}</label>
+    <label>${showSP ? t('label_order_price') : t('label_price')}</label>
     <div class="input-wrap">
       <input class="input" id="pxIn" type="number" value="${state.price}" placeholder="0.00" min="0" step="any">
       <span class="input-suffix">${quote}</span>
     </div>
-    ${state.ticker?.last ? `<div class="price-hint">最新价 <strong>${fmtPrice(state.ticker.last)}</strong> <button class="btn-fill-price" id="fillPxBtn">填入</button></div>` : ''}
+    ${state.ticker?.last ? `<div class="price-hint">${t('latest_price')} <strong>${fmtPrice(state.ticker.last)}</strong> <button class="btn-fill-price" id="fillPxBtn">${t('btn_fill')}</button></div>` : ''}
   </div>` : ''}
 
   <!-- 触发价格（止损/止盈） -->
   ${showSP ? `
   <div class="form-group">
-    <label>触发价格</label>
+    <label>${t('label_trigger_price')}</label>
     <div class="input-wrap">
       <input class="input" id="spIn" type="number" value="${state.stopPrice}" placeholder="0.00" min="0" step="any">
       <span class="input-suffix">${quote}</span>
@@ -259,36 +265,36 @@ function tradeForm() {
   <div class="reduce-only-row">
     <label class="checkbox-label">
       <input type="checkbox" id="reduceOnlyChk"${state.reduceOnly?' checked':''}>
-      <span>只减仓 (Reduce-only)</span>
+      <span>${t('reduce_only')}</span>
     </label>
   </div>` : ''}
 
   ${state.balance ? balanceBar() : ''}
 
   <div class="total-row">
-    <span>预估金额</span>
+    <span>${t('label_estimate')}</span>
     <span class="total-value">${estimateTotal()}</span>
   </div>
 
   <!-- 确认框（市价单） -->
   ${state.confirmPending ? confirmBox() : `
   <button class="submit-btn ${state.side}" id="submitBtn"${state.loading?' disabled':''}>
-    ${state.loading ? '提交中...' : submitLabel()}
+    ${state.loading ? t('submitting') : submitLabel()}
   </button>`}
 
 </div>`;
 }
 
 function tickerRow() {
-  const t = state.ticker;
-  const chg = t.change;
+  const tk = state.ticker;
+  const chg = tk.change;
   const chgClass = chg >= 0 ? 'chg-up' : 'chg-down';
   const chgStr = (chg >= 0 ? '+' : '') + (chg || 0).toFixed(2) + '%';
   return `
 <div class="ticker-row">
-  <span class="ticker-price">${fmtPrice(t.last)}</span>
+  <span class="ticker-price">${fmtPrice(tk.last)}</span>
   <span class="ticker-change ${chgClass}">${chgStr}</span>
-  <span class="ticker-spread">买 ${fmtPrice(t.bid)} / 卖 ${fmtPrice(t.ask)}</span>
+  <span class="ticker-spread">${t('spread_bid')} ${fmtPrice(tk.bid)} / ${t('spread_ask')} ${fmtPrice(tk.ask)}</span>
 </div>`;
 }
 
@@ -298,32 +304,32 @@ function pctButtons() {
   <button class="pct-btn" data-pct="25">25%</button>
   <button class="pct-btn" data-pct="50">50%</button>
   <button class="pct-btn" data-pct="75">75%</button>
-  <button class="pct-btn" data-pct="100">全仓</button>
+  <button class="pct-btn" data-pct="100">${t('all_in')}</button>
 </div>`;
 }
 
 function confirmBox() {
   const amt = state.amount;
-  const dir = state.side === 'buy' ? '买入' : '卖出';
+  const dir = t(state.side === 'buy' ? 'confirm_dir_buy' : 'confirm_dir_sell');
   return `
 <div class="confirm-box">
-  <p>确认市价${dir} <strong>${amt} ${baseCcy()}</strong>？</p>
-  <p class="confirm-warn">市价单将立即以当前市场价格成交，无法撤销。</p>
+  <p>${t('confirm_market', { dir, amt, base: baseCcy() })}</p>
+  <p class="confirm-warn">${t('confirm_warn')}</p>
   <div class="confirm-btns">
-    <button class="btn-confirm-yes" id="confirmYes">确认${dir}</button>
-    <button class="btn-confirm-no"  id="confirmNo">取消</button>
+    <button class="btn-confirm-yes" id="confirmYes">${t(state.side === 'buy' ? 'confirm_yes_buy' : 'confirm_yes_sell')}</button>
+    <button class="btn-confirm-no"  id="confirmNo">${t('btn_cancel')}</button>
   </div>
 </div>`;
 }
 
 function symDropdown() {
   if (state.marketsLoading) {
-    return `<div class="sym-dropdown"><div class="sym-empty">交易对加载中...</div></div>`;
+    return `<div class="sym-dropdown"><div class="sym-empty">${t('sym_loading')}</div></div>`;
   }
   const kw = (state.symSearch || '').toUpperCase();
   const list = kw ? state.markets.filter(s => s.toUpperCase().includes(kw)) : state.markets;
   const shown = list.slice(0, 80);
-  if (!shown.length) return `<div class="sym-dropdown"><div class="sym-empty">${state.markets.length ? '无匹配交易对' : '暂无数据，请配置 API Key'}</div></div>`;
+  if (!shown.length) return `<div class="sym-dropdown"><div class="sym-empty">${state.markets.length ? t('sym_no_match') : t('sym_no_data')}</div></div>`;
   return `<div class="sym-dropdown">${shown.map(s =>
     `<div class="sym-item${s===state.symbol?' active':''}" data-sym="${s}">${s}</div>`
   ).join('')}</div>`;
@@ -336,7 +342,7 @@ function balanceBar() {
   const bAvail = getAvail(b);
   return `
 <div class="balance-bar">
-  <span>可用: <strong>${bAvail} ${b}</strong></span>
+  <span>${t('label_available')} <strong>${bAvail} ${b}</strong></span>
   <span>/ <strong>${qAvail} ${q}</strong></span>
 </div>`;
 }
@@ -349,12 +355,12 @@ function ordersPanel() {
   return `
 <div>
   <div class="orders-tabs">
-    <button class="orders-tab${state.ordersTab==='open'?' active':''}" data-otab="open">挂单</button>
-    <button class="orders-tab${state.ordersTab==='history'?' active':''}" data-otab="history">历史</button>
-    ${isPerp ? `<button class="orders-tab${state.ordersTab==='positions'?' active':''}" data-otab="positions">持仓</button>` : ''}
+    <button class="orders-tab${state.ordersTab==='open'?' active':''}" data-otab="open">${t('orders_open')}</button>
+    <button class="orders-tab${state.ordersTab==='history'?' active':''}" data-otab="history">${t('orders_history')}</button>
+    ${isPerp ? `<button class="orders-tab${state.ordersTab==='positions'?' active':''}" data-otab="positions">${t('orders_positions')}</button>` : ''}
     <button class="btn-refresh" id="refreshBtn">↻</button>
   </div>
-  ${state.loading ? '<div class="loading">加载中...</div>' : ''}
+  ${state.loading ? `<div class="loading">${t('loading')}</div>` : ''}
   ${showPos ? positionsList() : ordersList()}
 </div>`;
 }
@@ -363,7 +369,7 @@ function ordersList() {
   return `
 <div class="orders-list">
   ${state.orders.length === 0
-    ? '<div class="empty">暂无订单</div>'
+    ? `<div class="empty">${t('no_orders')}</div>`
     : state.orders.map(orderCard).join('')}
 </div>`;
 }
@@ -372,46 +378,50 @@ function positionsList() {
   return `
 <div class="orders-list">
   ${state.positions.length === 0
-    ? '<div class="empty">暂无持仓</div>'
+    ? `<div class="empty">${t('no_positions')}</div>`
     : state.positions.map(positionCard).join('')}
 </div>`;
 }
 
 function orderCard(o) {
   const timeStr = o.time ? new Date(Number(o.time)).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+  const sideLabel = o.side === 'buy' ? t('side_buy_label') : t('side_sell_label');
+  const typeLabel = t(TYPE_KEY[o.type]) || o.type;
+  const statusLabel = t(STATUS_KEY[o.status]) || o.status;
   return `
 <div class="order-item">
   <div class="order-header">
     <span class="order-symbol">${o.symbol || '-'}</span>
-    <span class="order-side ${o.side}">${o.side === 'buy' ? '买入' : '卖出'}</span>
-    <span class="order-type">${TYPE_ZH[o.type] || o.type}</span>
+    <span class="order-side ${o.side}">${sideLabel}</span>
+    <span class="order-type">${typeLabel}</span>
   </div>
   <div class="order-details">
     <span>${o.amount || '-'} ${o.price ? '@ ' + o.price : ''} ${timeStr}</span>
-    <span class="status-${o.status}">${STATUS_ZH[o.status] || o.status}</span>
+    <span class="status-${o.status}">${statusLabel}</span>
   </div>
   ${state.ordersTab === 'open' ? `
-  <button class="cancel-btn" data-oid="${o.id}" data-sym="${o.symbol}" data-is-algo="${o.isAlgo?'1':'0'}">撤单</button>` : ''}
+  <button class="cancel-btn" data-oid="${o.id}" data-sym="${o.symbol}" data-is-algo="${o.isAlgo?'1':'0'}">${t('btn_cancel_order')}</button>` : ''}
 </div>`;
 }
 
 function positionCard(p) {
   const pnl = parseFloat(p.unrealizedPnl);
   const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+  const sideLabel = p.side === 'long' ? t('pos_long') : t('pos_short');
   return `
 <div class="position-item">
   <div class="pos-header">
     <span class="pos-symbol">${p.symbol}</span>
-    <span class="pos-side ${p.side}">${p.side === 'long' ? '做多' : '做空'}</span>
+    <span class="pos-side ${p.side}">${sideLabel}</span>
     ${p.leverage ? `<span class="pos-leverage">${p.leverage}x</span>` : ''}
     ${p.marginType ? `<span class="pos-margin-type">${p.marginType}</span>` : ''}
   </div>
   <div class="pos-grid">
-    <div class="pos-row"><span>持仓量</span><span>${p.contracts}</span></div>
-    <div class="pos-row"><span>开仓价</span><span>${p.entryPrice || '-'}</span></div>
-    <div class="pos-row"><span>标记价</span><span>${p.markPrice || '-'}</span></div>
-    <div class="pos-row"><span>未实现盈亏</span><span class="${pnlClass}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}</span></div>
-    <div class="pos-row"><span>强平价</span><span class="liq-price">${p.liquidationPrice || '-'}</span></div>
+    <div class="pos-row"><span>${t('pos_contracts')}</span><span>${p.contracts}</span></div>
+    <div class="pos-row"><span>${t('pos_entry')}</span><span>${p.entryPrice || '-'}</span></div>
+    <div class="pos-row"><span>${t('pos_mark')}</span><span>${p.markPrice || '-'}</span></div>
+    <div class="pos-row"><span>${t('pos_pnl')}</span><span class="${pnlClass}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}</span></div>
+    <div class="pos-row"><span>${t('pos_liq')}</span><span class="liq-price">${p.liquidationPrice || '-'}</span></div>
   </div>
 </div>`;
 }
@@ -426,10 +436,14 @@ function bind() {
     chrome.storage.local.set({ selectedExchange: state.exchange });
     render();
     silentLoadBalance();
-    silentLoadMarkets();   // 切换立即加载新交易所的交易对
+    silentLoadMarkets();
     startTickerRefresh();
   });
   q('#settingsBtn')?.addEventListener('click', () => chrome.runtime.openOptionsPage());
+  q('#langBtn')?.addEventListener('click', async () => {
+    await cycleLang();
+    render();
+  });
 
   qAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
     state.tab = b.dataset.tab;
@@ -445,7 +459,6 @@ function bind() {
   qAll('[data-mkt]').forEach(b => b.addEventListener('click', () => {
     state.marketType = b.dataset.mkt;
     state.markets = []; state.ticker = null;
-    // 切换到现货时若在持仓标签，切回挂单
     if (state.marketType === 'spot' && state.ordersTab === 'positions') state.ordersTab = 'open';
     chrome.storage.local.set({ lastMarket: state.marketType });
     render(); silentLoadBalance(); silentLoadMarkets(); startTickerRefresh();
@@ -470,7 +483,7 @@ function bind() {
     });
     symIn.addEventListener('input', e => {
       state.symSearch = e.target.value;
-      refreshSymDropdown(); // 只更新下拉，不重建页面
+      refreshSymDropdown();
     });
     symIn.addEventListener('blur', () => {
       setTimeout(() => {
@@ -504,7 +517,7 @@ function bind() {
     const pct = parseInt(b.dataset.pct);
     const amt = calcPctAmount(pct);
     if (amt) { state.amount = amt; render(); }
-    else toast('请先填写价格或等待行情加载', 'error');
+    else toast(t('msg_fill_price'), 'error');
   }));
 
   // ── 价格输入 + 填入最新价 ──
@@ -552,7 +565,7 @@ function sendMsg(action, params) {
   return new Promise(async (resolve, reject) => {
     const creds = await getCredentials();
     if (!creds && !PUBLIC_ACTIONS.has(action)) {
-      return reject(new Error(`请先在设置页面配置 ${EX_LABEL[state.exchange]} 的 API Key`));
+      return reject(new Error(t('msg_need_api', { exchange: EX_LABEL[state.exchange] })));
     }
     chrome.runtime.sendMessage(
       { action, exchange: state.exchange, credentials: creds, params },
@@ -565,12 +578,11 @@ function sendMsg(action, params) {
 }
 
 async function submitOrder(confirmed = false) {
-  if (!state.amount)    return toast('请输入数量', 'error');
-  if (state.orderType === 'limit' && !state.price) return toast('请输入价格', 'error');
+  if (!state.amount)    return toast(t('msg_enter_amount'), 'error');
+  if (state.orderType === 'limit' && !state.price) return toast(t('msg_enter_price'), 'error');
   if ((state.orderType === 'stop' || state.orderType === 'takeprofit') && !state.stopPrice)
-    return toast('请输入触发价格', 'error');
+    return toast(t('msg_enter_trigger'), 'error');
 
-  // 市价单需要用户二次确认
   if (state.orderType === 'market' && !confirmed) {
     state.confirmPending = true; render(); return;
   }
@@ -590,7 +602,7 @@ async function submitOrder(confirmed = false) {
     });
     state.loading = false;
     state.amount  = '';
-    toast('下单成功！', 'success');
+    toast(t('msg_order_success'), 'success');
     silentLoadBalance();
   } catch (e) {
     state.loading = false;
@@ -625,7 +637,7 @@ async function loadPositions() {
 async function doCancelOrder(orderId, symbol, isAlgo) {
   try {
     await sendMsg('cancelOrder', { symbol: symbol || state.symbol, orderId, isAlgo, marketType: state.marketType });
-    toast('撤单成功', 'success');
+    toast(t('msg_cancel_success'), 'success');
     loadOrders();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -679,7 +691,7 @@ function estimateTotal() {
   const amt = parseFloat(state.amount) || 0;
   const px  = parseFloat(state.price)  || state.ticker?.last || 0;
   if (state.orderType === 'market') {
-    if (!amt || !state.ticker?.last) return '市价';
+    if (!amt || !state.ticker?.last) return t('market_price_label');
     return `≈ ${(amt * state.ticker.last).toFixed(2)} ${quoteCcy()}`;
   }
   if (!amt || !px) return `0.00 ${quoteCcy()}`;
@@ -701,12 +713,10 @@ function calcPctAmount(pct) {
   const base  = baseCcy();
   const quote = quoteCcy();
   if (state.side === 'sell') {
-    // 卖出：用 base 余额
     const avail = parseFloat(getAvail(base));
     if (!avail) return '';
     return String((avail * pct / 100).toFixed(6));
   } else {
-    // 买入：用 quote 余额 / 价格
     const px = parseFloat(state.price) || state.ticker?.last;
     const avail = parseFloat(getAvail(quote));
     if (!px || !avail) return '';
@@ -714,9 +724,10 @@ function calcPctAmount(pct) {
   }
 }
 function submitLabel() {
-  const action = state.side === 'buy' ? '买入' : '卖出';
-  const type   = TYPE_ZH[state.orderType] || state.orderType;
-  return `${type}${action} ${baseCcy()}`;
+  const typeKey = { market: 'type_market', limit: 'type_limit', stop: 'type_stop', takeprofit: 'type_takeprofit' };
+  const type = t(typeKey[state.orderType] || state.orderType);
+  const key  = state.side === 'buy' ? 'submit_buy' : 'submit_sell';
+  return t(key, { type, base: baseCcy() });
 }
 function toast(msg, type = 'info') {
   state.toast = { msg, type };

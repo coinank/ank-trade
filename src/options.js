@@ -1,3 +1,5 @@
+import { initLang, t, langLabel, cycleLang } from './i18n.js';
+
 const EXCHANGES = [
   { id: 'binance',     name: 'Binance',     hasPass: false },
   { id: 'okx',         name: 'OKX',         hasPass: true  },
@@ -15,6 +17,7 @@ const state = {
 };
 
 async function init() {
+  await initLang();
   const keys  = EXCHANGES.map(e => `credentials_${e.id}`);
   const stored = await chrome.storage.local.get(['selectedExchange', ...keys]);
   if (stored.selectedExchange) state.cur = stored.selectedExchange;
@@ -37,7 +40,8 @@ function html() {
 <div class="options-wrap">
   <header class="options-header">
     <div class="logo-dot"></div>
-    <h1>Coinank Trader — API 设置</h1>
+    <h1>${t('options_title')}</h1>
+    <button class="btn-icon btn-lang" id="langBtn" style="margin-left:auto">${langLabel()}</button>
   </header>
 
   <div class="exchange-tabs">
@@ -49,62 +53,58 @@ function html() {
   </div>
 
   <div class="creds-card">
-    <h2>${ex.name} API 配置</h2>
+    <h2>${t('api_config_title', { exchange: ex.name })}</h2>
 
     ${ex.isEth ? `
     <div class="hint">
-      Hyperliquid 使用以太坊钱包授权。<br>
-      • <strong>API Key</strong> → 钱包地址（Wallet Address），如 0x...。<br>
-      • <strong>Secret</strong> → API Wallet 私钥（在 Hyperliquid 应用中创建）。<br>
-      建议使用专用 API 子钱包，不要填写主钱包私钥。
+      ${t('hl_hint')}<br>
+      • <strong>API Key</strong> → ${t('hl_key_hint')}<br>
+      • <strong>Secret</strong> → ${t('hl_secret_hint')}<br>
+      ${t('hl_sub_wallet')}
     </div>` : ''}
 
     ${ex.hasPass ? `
     <div class="hint">
-      ${ex.name} 需要额外的 Passphrase（创建 API 时自行设置）。
+      ${t('pass_hint', { exchange: ex.name })}
     </div>` : ''}
 
     <div class="field-group">
-      <label>${ex.isEth ? '钱包地址 (Wallet Address)' : 'API Key'}</label>
+      <label>${ex.isEth ? t('label_wallet') : t('label_api_key')}</label>
       <input class="field-input" id="apiKeyIn" type="text"
              value="${creds.apiKey || ''}"
-             placeholder="${ex.isEth ? '0x...' : '请输入 API Key'}" autocomplete="off">
+             placeholder="${ex.isEth ? t('ph_wallet') : t('ph_api_key')}" autocomplete="off">
     </div>
 
     <div class="field-group">
-      <label>${ex.isEth ? '私钥 (API Wallet Private Key)' : 'Secret Key'}</label>
+      <label>${ex.isEth ? t('label_private_key') : t('label_secret_key')}</label>
       <input class="field-input" id="secretIn" type="password"
              value="${creds.secret || ''}"
-             placeholder="${ex.isEth ? '0x... 或 64 位十六进制' : '请输入 Secret Key'}" autocomplete="off">
+             placeholder="${ex.isEth ? t('ph_private_key') : t('ph_secret_key')}" autocomplete="off">
     </div>
 
     ${ex.hasPass ? `
     <div class="field-group">
       <label>Passphrase</label>
       <input class="field-input" id="passIn" type="password"
-             value="${creds.passphrase || ''}" placeholder="请输入 Passphrase" autocomplete="off">
+             value="${creds.passphrase || ''}" placeholder="${t('ph_passphrase')}" autocomplete="off">
     </div>` : ''}
 
     <div class="actions">
       <button class="btn-primary" id="saveBtn"${state.saving?' disabled':''}>
-        ${state.saving ? '保存中...' : '保存'}
+        ${state.saving ? t('btn_saving') : t('btn_save')}
       </button>
       <button class="btn-secondary" id="testBtn"${state.testing?' disabled':''}>
-        ${state.testing ? '测试中...' : '测试连接'}
+        ${state.testing ? t('btn_testing') : t('btn_test')}
       </button>
-      <button class="btn-danger" id="clearBtn">清除</button>
+      <button class="btn-danger" id="clearBtn">${t('btn_clear')}</button>
     </div>
 
     ${state.msg ? `<div class="msg ${state.msg.type}">${state.msg.text}</div>` : ''}
   </div>
 
   <div class="security-note">
-    <strong>🔒 安全提示</strong>
-    <p>
-      所有 API Key 仅存储在您的本地浏览器（chrome.storage.local），
-      不会上传到任何服务器或第三方。建议仅开启交易权限，
-      <strong>不要开启提现权限</strong>。
-    </p>
+    <strong>${t('security_title')}</strong>
+    <p>${t('security_body')}</p>
   </div>
 </div>`;
 }
@@ -118,15 +118,19 @@ function bind() {
   document.getElementById('saveBtn')?.addEventListener('click', doSave);
   document.getElementById('testBtn')?.addEventListener('click', doTest);
   document.getElementById('clearBtn')?.addEventListener('click', doClear);
+  document.getElementById('langBtn')?.addEventListener('click', async () => {
+    await cycleLang();
+    render();
+  });
 }
 
 async function doSave() {
   const apiKey     = document.getElementById('apiKeyIn')?.value?.trim();
   const secret     = document.getElementById('secretIn')?.value?.trim();
   const passphrase = document.getElementById('passIn')?.value?.trim();
-  if (!apiKey || !secret) return showMsg('请填写 API Key 和 Secret', 'error');
+  if (!apiKey || !secret) return showMsg(t('msg_need_key_secret'), 'error');
   const ex = EXCHANGES.find(e => e.id === state.cur);
-  if (ex.hasPass && !passphrase) return showMsg('请填写 Passphrase', 'error');
+  if (ex.hasPass && !passphrase) return showMsg(t('msg_need_pass'), 'error');
 
   state.saving = true; render();
   const creds = { apiKey, secret };
@@ -135,7 +139,7 @@ async function doSave() {
   state.creds[state.cur] = creds;
   await chrome.storage.local.set({ [`credentials_${state.cur}`]: creds });
   state.saving = false;
-  showMsg('✓ 保存成功', 'success');
+  showMsg(t('msg_save_ok'), 'success');
   render();
 }
 
@@ -143,9 +147,9 @@ async function doTest() {
   const apiKey     = document.getElementById('apiKeyIn')?.value?.trim();
   const secret     = document.getElementById('secretIn')?.value?.trim();
   const passphrase = document.getElementById('passIn')?.value?.trim();
-  if (!apiKey || !secret) return showMsg('请先填写 API Key 和 Secret', 'error');
+  if (!apiKey || !secret) return showMsg(t('msg_need_key_first'), 'error');
   const ex = EXCHANGES.find(e => e.id === state.cur);
-  if (ex.hasPass && !passphrase) return showMsg('请先填写 Passphrase', 'error');
+  if (ex.hasPass && !passphrase) return showMsg(t('msg_need_pass_first'), 'error');
 
   state.testing = true; render();
   const creds = { apiKey, secret };
@@ -161,19 +165,19 @@ async function doTest() {
         }
       );
     });
-    showMsg('✓ 连接成功，API 有效', 'success');
+    showMsg(t('msg_test_ok'), 'success');
   } catch (e) {
-    showMsg(`✗ 连接失败: ${e.message}`, 'error');
+    showMsg(t('msg_test_fail', { error: e.message }), 'error');
   }
   state.testing = false; render();
 }
 
 async function doClear() {
   const ex = EXCHANGES.find(e => e.id === state.cur);
-  if (!confirm(`确定要清除 ${ex.name} 的 API 配置吗？`)) return;
+  if (!confirm(t('confirm_clear', { exchange: ex.name }))) return;
   delete state.creds[state.cur];
   await chrome.storage.local.remove(`credentials_${state.cur}`);
-  showMsg('已清除', 'info');
+  showMsg(t('msg_cleared'), 'info');
   render();
 }
 

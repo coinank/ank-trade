@@ -61,6 +61,7 @@ body {
   transition: all .15s;
 }
 .btn-icon:hover { color: var(--text); background: var(--bg3); }
+.btn-lang { font-size: 11px; font-weight: 700; letter-spacing: 0; }
 
 /* ── Tabs ── */
 .tabs {
