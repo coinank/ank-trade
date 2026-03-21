@@ -187,7 +187,7 @@ function orderCard(o) {
     <span class="${statusClass}">${STATUS_ZH[o.status] || o.status}</span>
   </div>
   ${state.ordersTab === 'open' ? `
-  <button class="cancel-btn" data-oid="${o.id}" data-sym="${o.symbol}">撤单</button>` : ''}
+  <button class="cancel-btn" data-oid="${o.id}" data-sym="${o.symbol}" data-is-algo="${o.isAlgo ? '1' : '0'}">撤单</button>` : ''}
 </div>`;
 }
 
@@ -230,7 +230,7 @@ function bind() {
   q('#refreshBtn')?.addEventListener('click', loadOrders);
 
   qAll('.cancel-btn').forEach(b => b.addEventListener('click', () => {
-    doCancelOrder(b.dataset.oid, b.dataset.sym);
+    doCancelOrder(b.dataset.oid, b.dataset.sym, b.dataset.isAlgo === '1');
   }));
 }
 
@@ -291,9 +291,9 @@ async function loadOrders() {
   state.loading = false; render();
 }
 
-async function doCancelOrder(orderId, symbol) {
+async function doCancelOrder(orderId, symbol, isAlgo) {
   try {
-    await sendMsg('cancelOrder', { symbol: symbol || state.symbol, orderId, marketType: state.marketType });
+    await sendMsg('cancelOrder', { symbol: symbol || state.symbol, orderId, isAlgo, marketType: state.marketType });
     toast('撤单成功', 'success');
     loadOrders();
   } catch (e) {
