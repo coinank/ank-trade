@@ -1,248 +1,216 @@
 # Coinank Trader
 
-> 一款专为加密货币交易者打造的 Chrome 浏览器插件，支持在 [Coinank](https://coinank.com) 页面快速下单，无需跳转交易所官网。
+> 专为加密货币交易者设计的 Chrome 插件，支持五大主流交易所的快捷下单、订单管理和账户余额查看。
 
-<div align="center">
-
-![Version](https://img.shields.io/badge/版本-1.0.0-blue)
-![License](https://img.shields.io/badge/许可证-MIT-green)
-![Chrome](https://img.shields.io/badge/Chrome-Manifest%20V3-orange)
-
-</div>
+![版本](https://img.shields.io/badge/版本-1.0.0-blue) ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green) ![ccxt](https://img.shields.io/badge/ccxt-4.x-orange)
 
 ---
 
-## ✨ 功能特性
+## 功能特性
 
-- **5 大主流交易所**：Binance、OKX、Bybit、Bitget、Hyperliquid
-- **3 种订单类型**：市价单、限价单、止损单
-- **现货 & 合约**：一键切换市场类型（Hyperliquid 仅合约）
-- **订单管理**：查询挂单 / 历史订单，支持一键撤单
-- **账户余额**：实时显示可用余额
-- **安全存储**：API Key 仅保存在本地浏览器，绝不上传至任何服务器
-- **深色主题**：专为交易场景优化的 UI 设计
-
----
-
-## 📸 界面预览
-
-```
-┌─────────────────────────────────────┐
-│  ⬡ Coinank Trader    [Binance ▼] ⚙  │
-├─────────────────────────────────────┤
-│       [  交易  ]  [  订单  ]         │
-├─────────────────────────────────────┤
-│  交易对                 [现货][合约]  │
-│  ┌─────────────────────────────┐    │
-│  │ BTC/USDT                    │    │
-│  └─────────────────────────────┘    │
-│                                     │
-│  [ 买入 / Long ]  [ 卖出 / Short ]  │
-│                                     │
-│  订单类型: [市价] [限价] [止损]      │
-│  数量:  [0.001           BTC ]      │
-│  价格:  [50000          USDT ]      │
-│                                     │
-│  预估金额    ≈ 50.00 USDT            │
-│  ┌─────────────────────────────┐    │
-│  │      限价买入 BTC/USDT       │    │
-│  └─────────────────────────────┘    │
-└─────────────────────────────────────┘
-```
+| 功能 | 说明 |
+|------|------|
+| **市价单** | 立即以当前市场价成交 |
+| **限价单** | 指定价格挂单，等待市场到达 |
+| **止损单** | 设置触发价，到达后自动执行（市价/限价） |
+| **挂单查询** | 查看当前所有未成交订单 |
+| **历史订单** | 查看最近 50 条成交/撤销记录 |
+| **一键撤单** | 直接从订单列表撤销任意订单 |
+| **账户余额** | 实时显示各币种可用余额 |
+| **现货/合约** | 支持切换现货和永续合约 |
 
 ---
 
-## 🚀 安装方式
+## 支持交易所
 
-### 方法一：从源码构建（推荐）
+| 交易所 | 现货 | 永续合约 | 止损单 | 备注 |
+|--------|------|----------|--------|------|
+| **Binance** | ✅ | ✅ | ✅ | 需开启期货权限 |
+| **OKX** | ✅ | ✅ | ✅ | 止损单走算法单接口 |
+| **Bybit** | ✅ | ✅ | ✅ | UNIFIED 账户 |
+| **Bitget** | ✅ | ✅ | ✅ | 止损单走计划单接口 |
+| **Hyperliquid** | ❌ | ✅ | ✅ | 仅永续合约，需 API 钱包私钥 |
 
-**1. 克隆仓库**
+---
+
+## 安装方法
+
+### 1. 克隆仓库并安装依赖
 
 ```bash
 git clone https://github.com/coinank/ank-trade.git
 cd ank-trade
-```
-
-**2. 安装依赖**
-
-```bash
 npm install
-```
-
-**3. 构建插件**
-
-```bash
 npm run build
 ```
 
-构建完成后，扩展文件输出到 `extension/` 目录。
-
-**4. 加载到 Chrome**
+### 2. 加载到 Chrome
 
 1. 打开 Chrome，访问 `chrome://extensions`
-2. 开启右上角「**开发者模式**」
-3. 点击「**加载已解压的扩展程序**」
+2. 右上角开启 **开发者模式**
+3. 点击 **加载已解压的扩展程序**
 4. 选择项目中的 `extension/` 目录
+5. 插件图标出现在浏览器工具栏
 
 ---
 
-## ⚙️ 配置 API Key
+## API Key 配置
 
-点击插件右上角的 **⚙ 设置** 按钮，进入 API 配置页面。
+点击插件图标 → 右上角齿轮图标 → 进入设置页面。
+
+> ⚠️ **安全提示**：API Key 仅存储在本地浏览器（`chrome.storage.local`），不会上传任何服务器。强烈建议只开启交易权限，**禁止开启提现权限**。
 
 ### Binance
 
-| 字段 | 说明 |
-|------|------|
-| API Key | 在 Binance「API 管理」页面创建 |
-| Secret Key | 创建时显示一次，请妥善保存 |
-
-> 权限设置：勾选「启用现货及杠杆交易」，**不要勾选提币权限**。
+1. 登录 Binance → 右上角头像 → **API 管理**
+2. 创建 API Key，勾选 **启用现货及杠杆交易**
+3. 如需合约交易，另勾选 **启用期货**
+4. 填入 `API Key` 和 `Secret Key`
 
 ### OKX
 
-| 字段 | 说明 |
-|------|------|
-| API Key | 在 OKX「API」页面创建 |
-| Secret Key | 创建时显示一次 |
-| Passphrase | 创建 API 时自行设置的密语 |
+1. 登录 OKX → 右上角头像 → **API**
+2. 创建 API Key，权限选择 **交易**
+3. 填入 `API Key`、`Secret Key` 和 **Passphrase**
 
 ### Bybit
 
-| 字段 | 说明 |
-|------|------|
-| API Key | 在 Bybit「API 管理」页面创建 |
-| Secret Key | 创建时显示一次 |
+1. 登录 Bybit → 右上角头像 → **API**
+2. 创建 API Key，勾选 **合约订单** 和 **现货订单**
+3. 填入 `API Key` 和 `API Secret`
 
 ### Bitget
 
-| 字段 | 说明 |
-|------|------|
-| API Key | 在 Bitget「API 管理」页面创建 |
-| Secret Key | 创建时显示一次 |
-| Passphrase | 创建 API 时自行设置的密语 |
+1. 登录 Bitget → 右上角头像 → **API 管理**
+2. 创建 API Key，权限选择 **交易**
+3. 填入 `API Key`、`Secret Key` 和 **Passphrase**
 
 ### Hyperliquid
 
-Hyperliquid 是去中心化衍生品交易所，使用以太坊钱包授权：
+Hyperliquid 使用 **API 钱包**机制，与其他交易所不同：
 
-| 字段 | 说明 |
-|------|------|
-| API Key | 填写你的**钱包地址**（0x...） |
-| Secret Key | 在 Hyperliquid 应用中创建的 **API Wallet 私钥** |
-
-> ⚠️ **强烈建议**：在 Hyperliquid 应用设置中创建专用的 API 子钱包，不要填写主钱包私钥。
->
-> 操作路径：Hyperliquid 官网 → 右上角账户 → API → 生成 API 密钥
+1. 登录 [Hyperliquid](https://app.hyperliquid.xyz) → 右上角 → **API**
+2. 点击 **Generate API Wallet**，系统生成专用 API 钱包
+3. 在插件设置中：
+   - **API Key** 填写：你的**主钱包地址**（`0x...`）
+   - **Secret** 填写：API 钱包的**私钥**（`0x` 开头的 64 位十六进制字符串）
 
 ---
 
-## 📖 使用指南
+## 使用指南
 
-### 快速下单
+### 下单
 
-1. 点击 Chrome 工具栏中的插件图标，打开交易面板
-2. 顶部下拉菜单选择**交易所**
-3. 填写**交易对**（如 `BTC/USDT`）
-4. 选择**市场类型**：现货 / 合约
+1. 点击插件图标，左上角选择交易所
+2. 选择 **现货** 或 **合约**
+3. 输入交易对（如 `BTC/USDT`）
+4. 选择订单类型：
+   - **市价**：直接填数量，点击买入/卖出
+   - **限价**：填价格和数量
+   - **止损**：填触发价，可选填委托价（不填则触发后以市价执行）
 5. 点击 **买入** 或 **卖出**
-6. 选择**订单类型**：
 
-   | 类型 | 说明 |
-   |------|------|
-   | 市价 | 以当前最优价格立即成交 |
-   | 限价 | 指定价格挂单，等待成交 |
-   | 止损 | 设置触发价，价格达到后自动下单 |
+### 查询订单
 
-7. 填写**数量**和**价格**（限价/止损单需要）
-8. 确认「预估金额」后点击提交按钮
+- **挂单** 标签：查看所有未成交订单，支持一键撤单
+- **历史** 标签：查看最近成交/撤销记录
 
-### 查看与撤销订单
+### 余额
 
-1. 点击顶部「**订单**」标签
-2. 切换「**挂单**」/ 「**历史**」查看对应订单
-3. 点击「**撤单**」按钮撤销未成交订单
-4. 点击 **↻** 按钮刷新订单列表
+交易界面上方自动显示当前账户余额，按交易对展示对应币种（如 BTC/USDT 显示 BTC 和 USDT 可用余额）。
 
 ---
 
-## 🛠️ 开发
+## 技术说明
 
-### 目录结构
+| 组件 | 技术 |
+|------|------|
+| Chrome 扩展 | Manifest V3，Service Worker |
+| 交易所接口 | [ccxt](https://github.com/ccxt/ccxt) 4.x 浏览器包 |
+| 构建工具 | esbuild |
+| 签名算法 | 由 ccxt 内部处理（HMAC-SHA256、EIP-712 等） |
+| 数据存储 | `chrome.storage.local`（本地，不同步至云端） |
+
+**为什么选择 ccxt？**
+
+ccxt 是业界最广泛使用的加密货币交易所 API 库，由社区持续维护，覆盖 100+ 交易所。使用 ccxt 的优势：
+
+- 交易所 API 变更时，只需 `npm update ccxt` 即可跟进，无需手动维护签名逻辑
+- 统一接口屏蔽各交易所的参数差异（如 OKX 止损单路由到算法接口、Bitget 路由到计划单接口）
+- 经过大量生产环境验证，稳定可靠
+
+**架构**
+
+```
+popup.html / options.html
+    │  chrome.runtime.sendMessage
+    ▼
+background.js (Service Worker)
+    │  importScripts('ccxt.browser.min.js')
+    │  makeExchange() → ccxt 实例（实例级缓存，markets 只加载一次）
+    ▼
+ccxt → 各交易所 REST API
+```
+
+**止损单路由**
+
+各交易所止损单实现方式不同，ccxt 内部自动处理：
+
+| 交易所 | 实现方式 | ccxt 触发条件 |
+|--------|----------|---------------|
+| Binance | `STOP` / `STOP_MARKET` (合约) `STOP_LOSS_LIMIT` (现货) | `stopLossPrice` 参数 |
+| OKX | `/api/v5/trade/order-algo` (算法单) | `stopLossPrice` 参数 → `ordType=conditional` |
+| Bybit | `triggerPrice` 条件单 | `triggerPrice` + `triggerDirection` 参数 |
+| Bitget | `/v2/mix/order/place-plan-order` (计划单) | `triggerPrice` 参数 → `planType=normal_plan` |
+| Hyperliquid | trigger 订单 | `stopLossPrice` 参数 → trigger 结构 |
+
+---
+
+## 本地开发
+
+```bash
+# 监听模式（保存后自动重新构建）
+npm run dev
+
+# 单次构建
+npm run build
+```
+
+修改代码后，在 `chrome://extensions` 页面点击插件卡片上的**刷新按钮**，使 Service Worker 加载最新代码。
+
+---
+
+## 目录结构
 
 ```
 ank-trade/
-├── extension/          # Chrome 扩展包（加载此目录）
+├── extension/            # Chrome 插件目录（加载此目录到 Chrome）
 │   ├── manifest.json
 │   ├── popup.html
 │   ├── options.html
-│   ├── icons/          # 自动生成
-│   └── dist/           # 构建输出，自动生成
-├── src/                # 源代码
-│   ├── background.js   # Service Worker（处理所有 API 请求）
-│   ├── popup.js        # 交易界面逻辑
-│   ├── options.js      # 设置页逻辑
-│   ├── popup.css       # 交易界面样式
-│   ├── options.css     # 设置页样式
-│   └── exchanges/      # 各交易所 API 模块
-│       ├── utils.js        # 公共工具（HMAC 签名等）
-│       ├── binance.js
-│       ├── okx.js
-│       ├── bybit.js
-│       ├── bitget.js
-│       └── hyperliquid.js  # EIP-712 签名
-├── scripts/
-│   ├── build.js            # esbuild 构建脚本
-│   └── generate-icons.js   # PNG 图标生成器
-└── package.json
+│   ├── icons/
+│   └── dist/             # 构建产物（自动生成，勿手动修改）
+│       ├── background.js
+│       ├── ccxt.browser.min.js
+│       ├── popup.js/css
+│       └── options.js/css
+├── src/
+│   ├── background.js     # Service Worker（ccxt 请求路由，~180 行）
+│   ├── popup.js/css      # 交易 UI
+│   └── options.js/css    # API Key 设置页
+└── scripts/
+    ├── build.js          # esbuild 构建脚本
+    └── generate-icons.js # 生成 PNG 图标
 ```
-
-### 可用命令
-
-```bash
-npm run build    # 构建生产版本
-npm run dev      # 构建 + 监听文件变化（开发模式）
-npm run icons    # 仅重新生成图标
-```
-
-### 添加新交易所
-
-在 `src/exchanges/` 下新建文件，导出以下函数：
-
-```js
-export async function placeOrder(credentials, params) {}
-export async function cancelOrder(credentials, params) {}
-export async function getOpenOrders(credentials, params) {}
-export async function getOrderHistory(credentials, params) {}
-export async function getBalance(credentials, params) {}
-```
-
-然后在 `src/background.js` 中注册该交易所即可。
 
 ---
 
-## 🔒 安全说明
+## 免责声明
 
-- 所有 API Key 通过 `chrome.storage.local` 存储在本地浏览器，**不会发送到任何第三方服务器**
-- 所有交易所 API 请求**直接**从插件发往交易所官方 API，中间无代理
-- 建议 API Key **只开启交易权限**，禁用提币权限
-- Hyperliquid 建议使用专用子钱包，避免主钱包私钥暴露风险
-- 请勿在不受信任的设备上使用
+本插件仅为个人交易工具，不构成任何投资建议。加密货币交易存在高风险，使用前请充分了解相关风险。作者不对任何交易损失承担责任。
 
 ---
 
-## 🤝 贡献
+## License
 
-欢迎提交 Issue 和 Pull Request！
-
-1. Fork 本仓库
-2. 创建特性分支：`git checkout -b feature/your-feature`
-3. 提交更改：`git commit -m 'feat: add your feature'`
-4. 推送分支：`git push origin feature/your-feature`
-5. 发起 Pull Request
-
----
-
-## 📄 许可证
-
-[MIT License](LICENSE) © 2024 Coinank
+MIT
