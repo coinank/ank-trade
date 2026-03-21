@@ -1,46 +1,135 @@
 // ─── 状态 ────────────────────────────────────────────────────────────────────
 const state = {
-  exchange:   'binance',
-  tab:        'trade',    // 'trade' | 'orders'
-  ordersTab:  'open',     // 'open' | 'history'
-  symbol:     'BTC/USDT',
-  marketType: 'spot',     // 'spot' | 'perp'
-  side:       'buy',
-  orderType:  'limit',    // 'market' | 'limit' | 'stop'
-  amount:     '',
-  price:      '',
-  stopPrice:  '',
-  orders:     [],
-  balance:    null,
-  loading:    false,
-  toast:      null,       // { msg, type }
+  exchange:       'binance',
+  tab:            'trade',    // 'trade' | 'orders'
+  ordersTab:      'open',     // 'open' | 'history' | 'positions'
+  symbol:         'BTC/USDT',
+  marketType:     'spot',     // 'spot' | 'perp'
+  side:           'buy',
+  orderType:      'limit',    // 'market' | 'limit' | 'stop' | 'takeprofit'
+  amount:         '',
+  price:          '',
+  stopPrice:      '',
+  orders:         [],
+  balance:        null,
+  positions:      [],
+  loading:        false,
+  toast:          null,
+  markets:        [],
+  marketsLoading: false,
+  symSearch:      '',
+  symOpen:        false,
+  ticker:         null,       // { last, bid, ask, change }
+  reduceOnly:     false,
+  confirmPending: false,      // 市价单确认
 };
 
 const EXCHANGES = ['binance', 'okx', 'bybit', 'bitget', 'hyperliquid'];
 const EX_LABEL  = { binance: 'Binance', okx: 'OKX', bybit: 'Bybit', bitget: 'Bitget', hyperliquid: 'Hyperliquid' };
 const STATUS_ZH = {
   new: '挂单中', open: '挂单中', live: '挂单中',
-  partially_filled: '部分成交',
-  filled: '已成交',
+  partially_filled: '部分成交', filled: '已成交',
   canceled: '已撤销', cancelled: '已撤销',
   rejected: '已拒绝', triggered: '已触发',
 };
-const TYPE_ZH   = { market: '市价', limit: '限价', stop: '止损', conditional: '条件单' };
+const TYPE_ZH = {
+  market: '市价', limit: '限价', stop: '止损', takeprofit: '止盈',
+  conditional: '条件单', take_profit: '止盈', take_profit_market: '止盈',
+};
+// 公开接口（不需要 API Key）
+const PUBLIC_ACTIONS = new Set(['getMarkets', 'getTicker']);
+
+// ─── 定时器 ───────────────────────────────────────────────────────────────────
+let _tickerTimer  = null;
+let _balanceTimer = null;
 
 // ─── 初始化 ──────────────────────────────────────────────────────────────────
 async function init() {
-  const s = await chrome.storage.local.get(['selectedExchange', 'lastSymbol', 'lastMarket']);
+  const s = await chrome.storage.local.get(['selectedExchange', 'lastSymbol', 'lastMarket', 'coinankSymbol']);
   if (s.selectedExchange) state.exchange   = s.selectedExchange;
   if (s.lastSymbol)       state.symbol     = s.lastSymbol;
   if (s.lastMarket)       state.marketType = s.lastMarket;
+  // Coinank 页面同步的符号优先
+  if (s.coinankSymbol)    state.symbol     = s.coinankSymbol;
   render();
   silentLoadBalance();
+  silentLoadMarkets();
+  startTickerRefresh();
+  startBalanceRefresh();
+
+  // 监听 Coinank content script 推送的符号变化
+  chrome.storage.onChanged.addListener(changes => {
+    if (changes.coinankSymbol?.newValue && changes.coinankSymbol.newValue !== state.symbol) {
+      state.symbol = changes.coinankSymbol.newValue;
+      state.ticker = null;
+      render();
+      startTickerRefresh();
+    }
+  });
+}
+
+// ─── 定时刷新 ─────────────────────────────────────────────────────────────────
+function startTickerRefresh() {
+  stopTickerRefresh();
+  silentLoadTicker();
+  _tickerTimer = setInterval(silentLoadTicker, 3000);
+}
+function stopTickerRefresh() {
+  if (_tickerTimer) { clearInterval(_tickerTimer); _tickerTimer = null; }
+}
+function startBalanceRefresh() {
+  if (_balanceTimer) return;
+  _balanceTimer = setInterval(() => {
+    if (state.tab === 'trade') silentLoadBalance();
+  }, 30000);
 }
 
 // ─── 渲染 ────────────────────────────────────────────────────────────────────
 function render() {
+  // 搜索下拉打开时，只更新价格栏，避免销毁 input 导致失焦
+  if (state.symOpen) { updatePriceBar(); return; }
   document.getElementById('app').innerHTML = html();
   bind();
+}
+
+// 仅刷新价格栏（不重建整个页面）
+function updatePriceBar() {
+  const bar = q('.price-bar');
+  if (!bar) return;
+  const t   = state.ticker;
+  const chg = t?.change;
+  const chgClass = chg != null ? (chg >= 0 ? 'chg-up' : 'chg-down') : '';
+  const chgStr   = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
+  bar.innerHTML = `
+    <span class="price-bar-sym">${state.symbol}</span>
+    ${t ? `
+    <span class="price-bar-price">${fmtPrice(t.last)}</span>
+    <span class="price-bar-change ${chgClass}">${chgStr}</span>
+    <span class="price-bar-spread">${fmtPrice(t.bid)} / ${fmtPrice(t.ask)}</span>
+    ` : '<span class="price-bar-loading">行情加载中...</span>'}
+  `;
+}
+
+// 仅刷新交易对下拉容器（不重建整个页面）
+function refreshSymDropdown() {
+  const container = q('#symDropdownContainer');
+  if (!container) return;
+  if (!state.symOpen) { container.innerHTML = ''; return; }
+  container.innerHTML = symDropdown();
+  q('#symDropdownContainer .sym-dropdown')?.addEventListener('mousedown', e => e.preventDefault());
+  qAll('#symDropdownContainer .sym-item').forEach(el => {
+    el.addEventListener('mousedown', e => { e.preventDefault(); selectSymbol(el.dataset.sym); });
+  });
+}
+
+function selectSymbol(sym) {
+  state.symbol   = sym;
+  state.symOpen  = false;
+  state.symSearch = '';
+  state.ticker   = null;
+  chrome.storage.local.set({ lastSymbol: state.symbol });
+  render();
+  startTickerRefresh();
 }
 
 function html() {
@@ -56,6 +145,10 @@ function html() {
 }
 
 function header() {
+  const t   = state.ticker;
+  const chg = t?.change;
+  const chgClass = chg != null ? (chg >= 0 ? 'chg-up' : 'chg-down') : '';
+  const chgStr   = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
   return `
 <header class="header">
   <div class="logo"><div class="logo-dot"></div> Coinank Trader</div>
@@ -65,68 +158,93 @@ function header() {
     </select>
     <button class="btn-icon" id="settingsBtn" title="设置">⚙</button>
   </div>
-</header>`;
+</header>
+<div class="price-bar">
+  <span class="price-bar-sym">${state.symbol}</span>
+  ${t ? `
+  <span class="price-bar-price">${fmtPrice(t.last)}</span>
+  <span class="price-bar-change ${chgClass}">${chgStr}</span>
+  <span class="price-bar-spread">${fmtPrice(t.bid)} / ${fmtPrice(t.ask)}</span>
+  ` : '<span class="price-bar-loading">行情加载中...</span>'}
+</div>`;
 }
 
 function tabs() {
+  const isHL = state.exchange === 'hyperliquid';
   return `
 <div class="tabs">
   <button class="tab${state.tab==='trade'?' active':''}" data-tab="trade">交易</button>
   <button class="tab${state.tab==='orders'?' active':''}" data-tab="orders">订单</button>
+  <div class="market-toggle">
+    <button class="toggle-btn${state.marketType==='spot'?' active':''}" data-mkt="spot"${isHL?' disabled':''}>现货</button>
+    <button class="toggle-btn${state.marketType==='perp'?' active':''}" data-mkt="perp">合约</button>
+  </div>
 </div>`;
 }
 
 function tradeForm() {
-  const isHL    = state.exchange === 'hyperliquid';
-  const showPx  = state.orderType !== 'market';
-  const showSP  = state.orderType === 'stop';
-  const quote   = quoteCcy();
-  const base    = baseCcy();
+  const showPx = state.orderType !== 'market';
+  const showSP = state.orderType === 'stop' || state.orderType === 'takeprofit';
+  const quote  = quoteCcy();
+  const base   = baseCcy();
+  const isPerp = state.marketType === 'perp';
 
   return `
 <div class="trade-form">
+
+  <!-- 交易对选择 -->
   <div class="form-group">
-    <div class="field-row">
-      <label>交易对</label>
-      <div class="market-toggle">
-        <button class="toggle-btn${state.marketType==='spot'?' active':''}" data-mkt="spot"${isHL?' disabled':''}>现货</button>
-        <button class="toggle-btn${state.marketType==='perp'?' active':''}" data-mkt="perp">合约</button>
+    <label>交易对</label>
+    <div class="sym-picker">
+      <div class="sym-input-row">
+        <input class="input" id="symSearch" type="text"
+          value="${state.symbol}"
+          placeholder="搜索交易对" autocomplete="off">
+        <button class="btn-sym-refresh" id="symRefreshBtn" title="刷新交易对">↻</button>
       </div>
+      <div id="symDropdownContainer"></div>
     </div>
-    <input class="input" id="symIn" type="text" value="${state.symbol}" placeholder="BTC/USDT">
   </div>
 
+  <!-- 买卖方向 -->
   <div class="side-selector">
     <button class="side-btn buy${state.side==='buy'?' active':''}" data-side="buy">买入 / Long</button>
     <button class="side-btn sell${state.side==='sell'?' active':''}" data-side="sell">卖出 / Short</button>
   </div>
 
+  <!-- 订单类型 -->
   <div class="form-group">
     <label>订单类型</label>
     <div class="order-type-tabs">
-      <button class="type-btn${state.orderType==='market'?' active':''}" data-ot="market">市价</button>
-      <button class="type-btn${state.orderType==='limit'?' active':''}"  data-ot="limit">限价</button>
-      <button class="type-btn${state.orderType==='stop'?' active':''}"   data-ot="stop">止损</button>
+      <button class="type-btn${state.orderType==='market'?' active':''}"     data-ot="market">市价</button>
+      <button class="type-btn${state.orderType==='limit'?' active':''}"      data-ot="limit">限价</button>
+      <button class="type-btn${state.orderType==='stop'?' active':''}"       data-ot="stop">止损</button>
+      <button class="type-btn${state.orderType==='takeprofit'?' active':''}" data-ot="takeprofit">止盈</button>
     </div>
   </div>
 
+  <!-- 数量 -->
   <div class="form-group">
     <label>数量</label>
     <div class="input-wrap">
       <input class="input" id="amtIn" type="number" value="${state.amount}" placeholder="0.000" min="0" step="any">
       <span class="input-suffix">${base}</span>
     </div>
+    ${state.balance ? pctButtons() : ''}
   </div>
 
+  <!-- 价格（限价/止损/止盈） -->
   ${showPx ? `
   <div class="form-group">
-    <label>${state.orderType==='stop'?'委托价格':'价格'}</label>
+    <label>${state.orderType==='stop'?'委托价格':state.orderType==='takeprofit'?'委托价格':'价格'}</label>
     <div class="input-wrap">
       <input class="input" id="pxIn" type="number" value="${state.price}" placeholder="0.00" min="0" step="any">
       <span class="input-suffix">${quote}</span>
     </div>
+    ${state.ticker?.last ? `<div class="price-hint">最新价 <strong>${fmtPrice(state.ticker.last)}</strong> <button class="btn-fill-price" id="fillPxBtn">填入</button></div>` : ''}
   </div>` : ''}
 
+  <!-- 触发价格（止损/止盈） -->
   ${showSP ? `
   <div class="form-group">
     <label>触发价格</label>
@@ -136,6 +254,15 @@ function tradeForm() {
     </div>
   </div>` : ''}
 
+  <!-- 只减仓（合约） -->
+  ${isPerp ? `
+  <div class="reduce-only-row">
+    <label class="checkbox-label">
+      <input type="checkbox" id="reduceOnlyChk"${state.reduceOnly?' checked':''}>
+      <span>只减仓 (Reduce-only)</span>
+    </label>
+  </div>` : ''}
+
   ${state.balance ? balanceBar() : ''}
 
   <div class="total-row">
@@ -143,37 +270,114 @@ function tradeForm() {
     <span class="total-value">${estimateTotal()}</span>
   </div>
 
+  <!-- 确认框（市价单） -->
+  ${state.confirmPending ? confirmBox() : `
   <button class="submit-btn ${state.side}" id="submitBtn"${state.loading?' disabled':''}>
     ${state.loading ? '提交中...' : submitLabel()}
-  </button>
+  </button>`}
+
 </div>`;
+}
+
+function tickerRow() {
+  const t = state.ticker;
+  const chg = t.change;
+  const chgClass = chg >= 0 ? 'chg-up' : 'chg-down';
+  const chgStr = (chg >= 0 ? '+' : '') + (chg || 0).toFixed(2) + '%';
+  return `
+<div class="ticker-row">
+  <span class="ticker-price">${fmtPrice(t.last)}</span>
+  <span class="ticker-change ${chgClass}">${chgStr}</span>
+  <span class="ticker-spread">买 ${fmtPrice(t.bid)} / 卖 ${fmtPrice(t.ask)}</span>
+</div>`;
+}
+
+function pctButtons() {
+  return `
+<div class="pct-btns">
+  <button class="pct-btn" data-pct="25">25%</button>
+  <button class="pct-btn" data-pct="50">50%</button>
+  <button class="pct-btn" data-pct="75">75%</button>
+  <button class="pct-btn" data-pct="100">全仓</button>
+</div>`;
+}
+
+function confirmBox() {
+  const amt = state.amount;
+  const dir = state.side === 'buy' ? '买入' : '卖出';
+  return `
+<div class="confirm-box">
+  <p>确认市价${dir} <strong>${amt} ${baseCcy()}</strong>？</p>
+  <p class="confirm-warn">市价单将立即以当前市场价格成交，无法撤销。</p>
+  <div class="confirm-btns">
+    <button class="btn-confirm-yes" id="confirmYes">确认${dir}</button>
+    <button class="btn-confirm-no"  id="confirmNo">取消</button>
+  </div>
+</div>`;
+}
+
+function symDropdown() {
+  if (state.marketsLoading) {
+    return `<div class="sym-dropdown"><div class="sym-empty">交易对加载中...</div></div>`;
+  }
+  const kw = (state.symSearch || '').toUpperCase();
+  const list = kw ? state.markets.filter(s => s.toUpperCase().includes(kw)) : state.markets;
+  const shown = list.slice(0, 80);
+  if (!shown.length) return `<div class="sym-dropdown"><div class="sym-empty">${state.markets.length ? '无匹配交易对' : '暂无数据，请配置 API Key'}</div></div>`;
+  return `<div class="sym-dropdown">${shown.map(s =>
+    `<div class="sym-item${s===state.symbol?' active':''}" data-sym="${s}">${s}</div>`
+  ).join('')}</div>`;
 }
 
 function balanceBar() {
   const q = quoteCcy();
-  const avail = getAvail(q);
-  return `<div class="balance-bar">可用: <strong>${avail} ${q}</strong></div>`;
+  const b = baseCcy();
+  const qAvail = getAvail(q);
+  const bAvail = getAvail(b);
+  return `
+<div class="balance-bar">
+  <span>可用: <strong>${bAvail} ${b}</strong></span>
+  <span>/ <strong>${qAvail} ${q}</strong></span>
+</div>`;
 }
 
 function ordersPanel() {
+  const isPerp    = state.marketType === 'perp';
+  const showPos   = isPerp && state.ordersTab === 'positions';
+  const showOrders = !showPos;
+
   return `
 <div>
   <div class="orders-tabs">
     <button class="orders-tab${state.ordersTab==='open'?' active':''}" data-otab="open">挂单</button>
     <button class="orders-tab${state.ordersTab==='history'?' active':''}" data-otab="history">历史</button>
+    ${isPerp ? `<button class="orders-tab${state.ordersTab==='positions'?' active':''}" data-otab="positions">持仓</button>` : ''}
     <button class="btn-refresh" id="refreshBtn">↻</button>
   </div>
   ${state.loading ? '<div class="loading">加载中...</div>' : ''}
-  <div class="orders-list">
-    ${state.orders.length === 0
-      ? '<div class="empty">暂无订单</div>'
-      : state.orders.map(orderCard).join('')}
-  </div>
+  ${showPos ? positionsList() : ordersList()}
+</div>`;
+}
+
+function ordersList() {
+  return `
+<div class="orders-list">
+  ${state.orders.length === 0
+    ? '<div class="empty">暂无订单</div>'
+    : state.orders.map(orderCard).join('')}
+</div>`;
+}
+
+function positionsList() {
+  return `
+<div class="orders-list">
+  ${state.positions.length === 0
+    ? '<div class="empty">暂无持仓</div>'
+    : state.positions.map(positionCard).join('')}
 </div>`;
 }
 
 function orderCard(o) {
-  const statusClass = `status-${o.status}`;
   const timeStr = o.time ? new Date(Number(o.time)).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
   return `
 <div class="order-item">
@@ -184,10 +388,31 @@ function orderCard(o) {
   </div>
   <div class="order-details">
     <span>${o.amount || '-'} ${o.price ? '@ ' + o.price : ''} ${timeStr}</span>
-    <span class="${statusClass}">${STATUS_ZH[o.status] || o.status}</span>
+    <span class="status-${o.status}">${STATUS_ZH[o.status] || o.status}</span>
   </div>
   ${state.ordersTab === 'open' ? `
-  <button class="cancel-btn" data-oid="${o.id}" data-sym="${o.symbol}" data-is-algo="${o.isAlgo ? '1' : '0'}">撤单</button>` : ''}
+  <button class="cancel-btn" data-oid="${o.id}" data-sym="${o.symbol}" data-is-algo="${o.isAlgo?'1':'0'}">撤单</button>` : ''}
+</div>`;
+}
+
+function positionCard(p) {
+  const pnl = parseFloat(p.unrealizedPnl);
+  const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+  return `
+<div class="position-item">
+  <div class="pos-header">
+    <span class="pos-symbol">${p.symbol}</span>
+    <span class="pos-side ${p.side}">${p.side === 'long' ? '做多' : '做空'}</span>
+    ${p.leverage ? `<span class="pos-leverage">${p.leverage}x</span>` : ''}
+    ${p.marginType ? `<span class="pos-margin-type">${p.marginType}</span>` : ''}
+  </div>
+  <div class="pos-grid">
+    <div class="pos-row"><span>持仓量</span><span>${p.contracts}</span></div>
+    <div class="pos-row"><span>开仓价</span><span>${p.entryPrice || '-'}</span></div>
+    <div class="pos-row"><span>标记价</span><span>${p.markPrice || '-'}</span></div>
+    <div class="pos-row"><span>未实现盈亏</span><span class="${pnlClass}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}</span></div>
+    <div class="pos-row"><span>强平价</span><span class="liq-price">${p.liquidationPrice || '-'}</span></div>
+  </div>
 </div>`;
 }
 
@@ -195,39 +420,121 @@ function orderCard(o) {
 function bind() {
   q('#exSel')?.addEventListener('change', e => {
     state.exchange = e.target.value;
+    state.markets = []; state.ticker = null;
+    // Hyperliquid 仅支持合约
+    if (state.exchange === 'hyperliquid') state.marketType = 'perp';
     chrome.storage.local.set({ selectedExchange: state.exchange });
-    render(); silentLoadBalance();
+    render();
+    silentLoadBalance();
+    silentLoadMarkets();   // 切换立即加载新交易所的交易对
+    startTickerRefresh();
   });
   q('#settingsBtn')?.addEventListener('click', () => chrome.runtime.openOptionsPage());
 
   qAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
     state.tab = b.dataset.tab;
-    if (state.tab === 'orders') loadOrders();
+    if (state.tab === 'orders') {
+      if (state.ordersTab === 'positions') loadPositions();
+      else loadOrders();
+    } else {
+      startTickerRefresh();
+    }
     render();
   }));
+
   qAll('[data-mkt]').forEach(b => b.addEventListener('click', () => {
     state.marketType = b.dataset.mkt;
+    state.markets = []; state.ticker = null;
+    // 切换到现货时若在持仓标签，切回挂单
+    if (state.marketType === 'spot' && state.ordersTab === 'positions') state.ordersTab = 'open';
     chrome.storage.local.set({ lastMarket: state.marketType });
-    render(); silentLoadBalance();
+    render(); silentLoadBalance(); silentLoadMarkets(); startTickerRefresh();
   }));
-  qAll('[data-side]').forEach(b => b.addEventListener('click', () => { state.side = b.dataset.side; render(); }));
-  qAll('[data-ot]').forEach(b => b.addEventListener('click', () => { state.orderType = b.dataset.ot; render(); }));
 
-  q('#symIn')?.addEventListener('change', e => {
-    state.symbol = e.target.value.trim();
-    chrome.storage.local.set({ lastSymbol: state.symbol });
+  qAll('[data-side]').forEach(b => b.addEventListener('click', () => {
+    state.side = b.dataset.side; render();
+  }));
+  qAll('[data-ot]').forEach(b => b.addEventListener('click', () => {
+    state.orderType = b.dataset.ot; render();
+  }));
+
+  // ── 交易对搜索下拉 ──
+  const symIn = q('#symSearch');
+  if (symIn) {
+    symIn.addEventListener('focus', () => {
+      state.symOpen  = true;
+      state.symSearch = state.symbol;
+      symIn.value = state.symbol;
+      symIn.select();
+      refreshSymDropdown();
+    });
+    symIn.addEventListener('input', e => {
+      state.symSearch = e.target.value;
+      refreshSymDropdown(); // 只更新下拉，不重建页面
+    });
+    symIn.addEventListener('blur', () => {
+      setTimeout(() => {
+        if (state.symOpen) {
+          state.symOpen  = false;
+          state.symSearch = '';
+          const el = q('#symSearch');
+          if (el) el.value = state.symbol;
+          refreshSymDropdown();
+        }
+      }, 150);
+    });
+    symIn.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        state.symOpen = false; state.symSearch = '';
+        symIn.value = state.symbol;
+        refreshSymDropdown(); symIn.blur();
+      } else if (e.key === 'Enter') {
+        const first = q('#symDropdownContainer .sym-item');
+        if (first) selectSymbol(first.dataset.sym);
+      }
+    });
+  }
+  q('#symRefreshBtn')?.addEventListener('click', e => {
+    e.stopPropagation(); state.markets = []; silentLoadMarkets(true);
   });
+
+  // ── 数量输入 + % 快捷按钮 ──
   q('#amtIn')?.addEventListener('input', e => { state.amount = e.target.value; });
-  q('#pxIn')?.addEventListener('input',  e => { state.price  = e.target.value; });
-  q('#spIn')?.addEventListener('input',  e => { state.stopPrice = e.target.value; });
+  qAll('.pct-btn').forEach(b => b.addEventListener('click', () => {
+    const pct = parseInt(b.dataset.pct);
+    const amt = calcPctAmount(pct);
+    if (amt) { state.amount = amt; render(); }
+    else toast('请先填写价格或等待行情加载', 'error');
+  }));
 
+  // ── 价格输入 + 填入最新价 ──
+  q('#pxIn')?.addEventListener('input', e => { state.price = e.target.value; });
+  q('#fillPxBtn')?.addEventListener('click', () => {
+    if (state.ticker?.last) { state.price = String(state.ticker.last); render(); }
+  });
+
+  // ── 触发价格 ──
+  q('#spIn')?.addEventListener('input', e => { state.stopPrice = e.target.value; });
+
+  // ── 只减仓 ──
+  q('#reduceOnlyChk')?.addEventListener('change', e => { state.reduceOnly = e.target.checked; });
+
+  // ── 下单 / 确认 ──
   q('#submitBtn')?.addEventListener('click', submitOrder);
+  q('#confirmYes')?.addEventListener('click', () => { submitOrder(true); });
+  q('#confirmNo')?.addEventListener('click',  () => { state.confirmPending = false; render(); });
 
+  // ── 订单 tab ──
   qAll('[data-otab]').forEach(b => b.addEventListener('click', () => {
     state.ordersTab = b.dataset.otab;
-    loadOrders(); render();
+    if (state.ordersTab === 'positions') loadPositions();
+    else loadOrders();
+    render();
   }));
-  q('#refreshBtn')?.addEventListener('click', loadOrders);
+  q('#refreshBtn')?.addEventListener('click', () => {
+    if (state.ordersTab === 'positions') loadPositions();
+    else loadOrders();
+  });
 
   qAll('.cancel-btn').forEach(b => b.addEventListener('click', () => {
     doCancelOrder(b.dataset.oid, b.dataset.sym, b.dataset.isAlgo === '1');
@@ -244,7 +551,9 @@ async function getCredentials() {
 function sendMsg(action, params) {
   return new Promise(async (resolve, reject) => {
     const creds = await getCredentials();
-    if (!creds) return reject(new Error(`请先在设置页面配置 ${EX_LABEL[state.exchange]} 的 API Key`));
+    if (!creds && !PUBLIC_ACTIONS.has(action)) {
+      return reject(new Error(`请先在设置页面配置 ${EX_LABEL[state.exchange]} 的 API Key`));
+    }
     chrome.runtime.sendMessage(
       { action, exchange: state.exchange, credentials: creds, params },
       res => {
@@ -255,22 +564,34 @@ function sendMsg(action, params) {
   });
 }
 
-async function submitOrder() {
+async function submitOrder(confirmed = false) {
   if (!state.amount)    return toast('请输入数量', 'error');
   if (state.orderType === 'limit' && !state.price) return toast('请输入价格', 'error');
-  if (state.orderType === 'stop' && !state.stopPrice) return toast('请输入触发价格', 'error');
+  if ((state.orderType === 'stop' || state.orderType === 'takeprofit') && !state.stopPrice)
+    return toast('请输入触发价格', 'error');
 
+  // 市价单需要用户二次确认
+  if (state.orderType === 'market' && !confirmed) {
+    state.confirmPending = true; render(); return;
+  }
+  state.confirmPending = false;
   state.loading = true; render();
+
   try {
     await sendMsg('placeOrder', {
-      symbol: state.symbol, side: state.side,
-      orderType: state.orderType, amount: state.amount,
-      price: state.price, stopPrice: state.stopPrice,
+      symbol:     state.symbol,
+      side:       state.side,
+      orderType:  state.orderType,
+      amount:     state.amount,
+      price:      state.price,
+      stopPrice:  state.stopPrice,
       marketType: state.marketType,
+      reduceOnly: state.reduceOnly,
     });
     state.loading = false;
-    state.amount = '';
-    toast('下单成功!', 'success');
+    state.amount  = '';
+    toast('下单成功！', 'success');
+    silentLoadBalance();
   } catch (e) {
     state.loading = false;
     toast(e.message, 'error');
@@ -285,8 +606,18 @@ async function loadOrders() {
     const data = await sendMsg(action, { symbol: state.symbol, marketType: state.marketType });
     state.orders = Array.isArray(data) ? data : (data?.list || data?.orders || []);
   } catch (e) {
-    state.orders = [];
-    toast(e.message, 'error');
+    state.orders = []; toast(e.message, 'error');
+  }
+  state.loading = false; render();
+}
+
+async function loadPositions() {
+  state.loading = true; render();
+  try {
+    const data = await sendMsg('getPositions', { marketType: 'perp' });
+    state.positions = Array.isArray(data) ? data : [];
+  } catch (e) {
+    state.positions = []; toast(e.message, 'error');
   }
   state.loading = false; render();
 }
@@ -296,9 +627,7 @@ async function doCancelOrder(orderId, symbol, isAlgo) {
     await sendMsg('cancelOrder', { symbol: symbol || state.symbol, orderId, isAlgo, marketType: state.marketType });
     toast('撤单成功', 'success');
     loadOrders();
-  } catch (e) {
-    toast(e.message, 'error');
-  }
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function silentLoadBalance() {
@@ -309,6 +638,25 @@ async function silentLoadBalance() {
   } catch (_) { state.balance = null; }
 }
 
+async function silentLoadMarkets(forceReload = false) {
+  state.marketsLoading = true;
+  if (state.symOpen) refreshSymDropdown(); else render();
+  try {
+    const data = await sendMsg('getMarkets', { marketType: state.marketType, forceReload });
+    state.markets = Array.isArray(data) ? data : [];
+  } catch (_) { state.markets = []; }
+  state.marketsLoading = false;
+  if (state.symOpen) refreshSymDropdown(); else render();
+}
+
+async function silentLoadTicker() {
+  try {
+    const data = await sendMsg('getTicker', { symbol: state.symbol, marketType: state.marketType });
+    state.ticker = data;
+    render();
+  } catch (_) { state.ticker = null; }
+}
+
 // ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 function baseCcy() {
   if (state.symbol.includes('/')) return state.symbol.split('/')[0].toUpperCase();
@@ -316,15 +664,24 @@ function baseCcy() {
   return state.symbol.toUpperCase();
 }
 function quoteCcy() {
-  // split(':')[0] 处理 ccxt 永续合约符号格式 BTC/USDT:USDT → 取 USDT
   if (state.symbol.includes('/')) return state.symbol.split('/')[1].split(':')[0].toUpperCase();
   for (const q of ['USDT','BUSD','USDC']) if (state.symbol.toUpperCase().endsWith(q)) return q;
   return 'USDT';
 }
+function fmtPrice(n) {
+  if (n == null) return '-';
+  const v = parseFloat(n);
+  if (v >= 1000) return v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (v >= 1)    return v.toFixed(4);
+  return v.toFixed(6);
+}
 function estimateTotal() {
   const amt = parseFloat(state.amount) || 0;
-  const px  = parseFloat(state.price)  || 0;
-  if (state.orderType === 'market') return '市价';
+  const px  = parseFloat(state.price)  || state.ticker?.last || 0;
+  if (state.orderType === 'market') {
+    if (!amt || !state.ticker?.last) return '市价';
+    return `≈ ${(amt * state.ticker.last).toFixed(2)} ${quoteCcy()}`;
+  }
   if (!amt || !px) return `0.00 ${quoteCcy()}`;
   return `≈ ${(amt * px).toFixed(2)} ${quoteCcy()}`;
 }
@@ -332,13 +689,29 @@ function getAvail(currency) {
   if (!state.balance) return '0';
   const list = Array.isArray(state.balance) ? state.balance : [];
   for (const b of list) {
-    const ccy = b.asset || b.ccy || b.currency || b.coin || b.coinName || '';
+    const ccy = b.asset || b.ccy || b.currency || b.coin || '';
     if (ccy.toUpperCase() === currency.toUpperCase()) {
-      const v = parseFloat(b.free || b.available || b.cashBal || b.availableToWithdraw || b.walletBalance || 0);
+      const v = parseFloat(b.free || b.available || b.walletBalance || 0);
       return v.toFixed(4);
     }
   }
   return '0';
+}
+function calcPctAmount(pct) {
+  const base  = baseCcy();
+  const quote = quoteCcy();
+  if (state.side === 'sell') {
+    // 卖出：用 base 余额
+    const avail = parseFloat(getAvail(base));
+    if (!avail) return '';
+    return String((avail * pct / 100).toFixed(6));
+  } else {
+    // 买入：用 quote 余额 / 价格
+    const px = parseFloat(state.price) || state.ticker?.last;
+    const avail = parseFloat(getAvail(quote));
+    if (!px || !avail) return '';
+    return String((avail * pct / 100 / px).toFixed(6));
+  }
 }
 function submitLabel() {
   const action = state.side === 'buy' ? '买入' : '卖出';

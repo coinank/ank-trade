@@ -56,11 +56,26 @@ async function build() {
   });
   console.log('✓ dist/options.js');
 
+  // 4. Content script（Coinank 页面交易对检测）
+  await esbuild.build({
+    entryPoints: ['src/content.js'],
+    outfile:     'extension/dist/content.js',
+    bundle:      false,
+    platform:    'browser',
+    format:      'iife',
+    target:      'chrome114',
+    minify:      !isWatch,
+    sourcemap:   isWatch,
+  });
+  console.log('✓ dist/content.js');
+
   // 4. CSS 直接复制（无需打包）
-  fs.copyFileSync('src/popup.css',   'extension/dist/popup.css');
+  fs.copyFileSync('src/popup.css',    'extension/dist/popup.css');
   console.log('✓ dist/popup.css');
-  fs.copyFileSync('src/options.css', 'extension/dist/options.css');
+  fs.copyFileSync('src/options.css',  'extension/dist/options.css');
   console.log('✓ dist/options.css');
+  fs.copyFileSync('src/sidepanel.css','extension/dist/sidepanel.css');
+  console.log('✓ dist/sidepanel.css');
 
   console.log('\n✅ 构建完成！');
   console.log('   在 Chrome 中加载：chrome://extensions  →  开发者模式  →  加载已解压的扩展程序');
