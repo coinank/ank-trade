@@ -11,13 +11,19 @@ const isWatch = process.argv.includes('--watch');
 async function build() {
   console.log('🔨 构建 Coinank Trader 插件...\n');
 
-  // 1. Background service worker（ESM 格式，支持 import）
+  // 0. 复制 ccxt 浏览器包（由 importScripts 加载，不参与 esbuild 打包）
+  const ccxtSrc  = path.join(__dirname, '../node_modules/ccxt/dist/ccxt.browser.min.js');
+  const ccxtDest = path.join(dist, 'ccxt.browser.min.js');
+  fs.copyFileSync(ccxtSrc, ccxtDest);
+  console.log('✓ dist/ccxt.browser.min.js');
+
+  // 1. Background service worker（IIFE 格式，配合 importScripts 加载 ccxt）
   await esbuild.build({
     entryPoints: ['src/background.js'],
     outfile:     'extension/dist/background.js',
-    bundle:      true,
+    bundle:      false,   // background.js 不再 import 本地模块，无需打包
     platform:    'browser',
-    format:      'esm',
+    format:      'iife',
     target:      'chrome114',
     minify:      !isWatch,
     sourcemap:   isWatch,
