@@ -125,6 +125,8 @@ async function doSave() {
   const secret     = document.getElementById('secretIn')?.value?.trim();
   const passphrase = document.getElementById('passIn')?.value?.trim();
   if (!apiKey || !secret) return showMsg('请填写 API Key 和 Secret', 'error');
+  const ex = EXCHANGES.find(e => e.id === state.cur);
+  if (ex.hasPass && !passphrase) return showMsg('请填写 Passphrase', 'error');
 
   state.saving = true; render();
   const creds = { apiKey, secret };
@@ -142,6 +144,8 @@ async function doTest() {
   const secret     = document.getElementById('secretIn')?.value?.trim();
   const passphrase = document.getElementById('passIn')?.value?.trim();
   if (!apiKey || !secret) return showMsg('请先填写 API Key 和 Secret', 'error');
+  const ex = EXCHANGES.find(e => e.id === state.cur);
+  if (ex.hasPass && !passphrase) return showMsg('请先填写 Passphrase', 'error');
 
   state.testing = true; render();
   const creds = { apiKey, secret };
