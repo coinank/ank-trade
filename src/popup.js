@@ -257,7 +257,7 @@ function sendMsg(action, params) {
 
 async function submitOrder() {
   if (!state.amount)    return toast('请输入数量', 'error');
-  if (state.orderType !== 'market' && !state.price) return toast('请输入价格', 'error');
+  if (state.orderType === 'limit' && !state.price) return toast('请输入价格', 'error');
   if (state.orderType === 'stop' && !state.stopPrice) return toast('请输入触发价格', 'error');
 
   state.loading = true; render();
@@ -316,7 +316,8 @@ function baseCcy() {
   return state.symbol.toUpperCase();
 }
 function quoteCcy() {
-  if (state.symbol.includes('/')) return state.symbol.split('/')[1].toUpperCase();
+  // split(':')[0] 处理 ccxt 永续合约符号格式 BTC/USDT:USDT → 取 USDT
+  if (state.symbol.includes('/')) return state.symbol.split('/')[1].split(':')[0].toUpperCase();
   for (const q of ['USDT','BUSD','USDC']) if (state.symbol.toUpperCase().endsWith(q)) return q;
   return 'USDT';
 }

@@ -14,7 +14,8 @@ const EX_LABEL = {
 const _cache = new Map();
 
 function makeExchange(exchangeId, credentials, marketType) {
-  const key = `${exchangeId}_${marketType}_${credentials.apiKey}`;
+  // 包含 secret 末 8 位：确保用户修改 secret 后使用新实例
+  const key = `${exchangeId}_${marketType}_${credentials.apiKey}_${credentials.secret.slice(-8)}`;
   if (_cache.has(key)) return _cache.get(key);
 
   const ExClass = self.ccxt[exchangeId];
@@ -77,6 +78,13 @@ async function doPlaceOrder(ex, exchangeId, { symbol, side, orderType, amount, p
   if (!amt || amt <= 0) throw new Error('数量必须大于 0');
 
   if (orderType === 'market') {
+    // Hyperliquid market orders require a price as slippage reference (ccxt mandatory)
+    if (exchangeId === 'hyperliquid') {
+      const ticker = await ex.fetchTicker(symbol);
+      const refPx = ticker.last || ticker.ask || ticker.bid;
+      if (!refPx) throw new Error('Hyperliquid 市价单无法获取当前价格，请改用限价单');
+      return ex.createMarketOrder(symbol, side, amt, refPx);
+    }
     return ex.createMarketOrder(symbol, side, amt);
   }
 
