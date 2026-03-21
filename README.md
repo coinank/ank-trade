@@ -1,6 +1,6 @@
 # Coinank Trader
 
-> 专为加密货币交易者设计的 Chrome 插件，支持五大主流交易所的快捷下单、订单管理和账户余额查看。
+> 专为加密货币交易者设计的 Chrome 侧边栏插件，支持五大主流交易所的快捷下单、实时行情、订单管理和持仓查看。
 
 ![版本](https://img.shields.io/badge/版本-1.0.0-blue) ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green) ![ccxt](https://img.shields.io/badge/ccxt-4.x-orange)
 
@@ -10,32 +10,46 @@
 
 | 功能 | 说明 |
 |------|------|
-| **市价单** | 立即以当前市场价成交 |
+| **Side Panel 侧边栏** | 固定在浏览器右侧，全高显示，不遮挡页面 |
+| **实时行情** | 每 3 秒自动刷新当前交易对最新价、涨跌幅、买卖价 |
+| **市价单** | 二次确认后立即以市场价成交 |
 | **限价单** | 指定价格挂单，等待市场到达 |
 | **止损单** | 设置触发价，到达后自动执行（市价/限价） |
-| **挂单查询** | 查看当前所有未成交订单 |
+| **止盈单** | 设置触发价，到达后自动止盈 |
+| **交易对搜索** | 输入关键词实时过滤，快速切换币种 |
+| **比例快速填量** | 25% / 50% / 75% / 100% 余额一键填入数量 |
+| **挂单查询** | 查看当前所有未成交订单，支持一键撤单 |
 | **历史订单** | 查看最近 50 条成交/撤销记录 |
-| **一键撤单** | 直接从订单列表撤销任意订单 |
-| **账户余额** | 实时显示各币种可用余额 |
-| **现货/合约** | 支持切换现货和永续合约 |
+| **合约持仓** | 查看持仓量、开仓价、标记价、未实现盈亏、强平价 |
+| **只减仓** | 合约下单支持 Reduce-only 模式 |
+| **账户余额** | 实时显示各币种可用余额，30 秒自动刷新 |
+| **Coinank 联动** | 在 coinank.com 浏览时自动同步当前交易对到侧边栏 |
 
 ---
 
 ## 支持交易所
 
-| 交易所 | 现货 | 永续合约 | 止损单 | 备注 |
-|--------|------|----------|--------|------|
-| **Binance** | ✅ | ✅ | ✅ | 需开启期货权限 |
-| **OKX** | ✅ | ✅ | ✅ | 止损单走算法单接口 |
-| **Bybit** | ✅ | ✅ | ✅ | UNIFIED 账户 |
-| **Bitget** | ✅ | ✅ | ✅ | 止损单走计划单接口 |
-| **Hyperliquid** | ❌ | ✅ | ✅ | 仅永续合约，需 API 钱包私钥 |
+| 交易所 | 现货 | 永续合约 | 止损单 | 止盈单 | 备注 |
+|--------|------|----------|--------|--------|------|
+| **Binance** | ✅ | ✅ | ✅ | ✅ | 需开启期货权限 |
+| **OKX** | ✅ | ✅ | ✅ | ✅ | 止损/止盈走算法单接口 |
+| **Bybit** | ✅ | ✅ | ✅ | ✅ | UNIFIED 账户 |
+| **Bitget** | ✅ | ✅ | ✅ | ✅ | 止损/止盈走计划单接口 |
+| **Hyperliquid** | ❌ | ✅ | ✅ | ✅ | 仅永续合约，需 API 钱包私钥 |
 
 ---
 
 ## 安装方法
 
-### 1. 克隆仓库并安装依赖
+### 方式一：直接下载（推荐）
+
+1. 前往 [Releases](https://github.com/coinank/ank-trade/releases) 下载最新的 `coinank-trader-vX.X.X.zip`
+2. 解压 zip 文件
+3. 打开 Chrome，访问 `chrome://extensions`
+4. 右上角开启 **开发者模式**
+5. 点击 **加载已解压的扩展程序**，选择解压后的 `extension/` 目录
+
+### 方式二：从源码构建
 
 ```bash
 git clone https://github.com/coinank/ank-trade.git
@@ -44,19 +58,17 @@ npm install
 npm run build
 ```
 
-### 2. 加载到 Chrome
+然后在 Chrome 中加载 `extension/` 目录。
 
-1. 打开 Chrome，访问 `chrome://extensions`
-2. 右上角开启 **开发者模式**
-3. 点击 **加载已解压的扩展程序**
-4. 选择项目中的 `extension/` 目录
-5. 插件图标出现在浏览器工具栏
+### 使用侧边栏
+
+安装完成后，点击浏览器工具栏中的 **Coinank Trader 图标**，侧边栏将自动在浏览器右侧打开，再次点击可关闭。
 
 ---
 
 ## API Key 配置
 
-点击插件图标 → 右上角齿轮图标 → 进入设置页面。
+点击侧边栏右上角 **⚙ 齿轮图标** 进入设置页面。
 
 > ⚠️ **安全提示**：API Key 仅存储在本地浏览器（`chrome.storage.local`），不会上传任何服务器。强烈建议只开启交易权限，**禁止开启提现权限**。
 
@@ -101,23 +113,28 @@ Hyperliquid 使用 **API 钱包**机制，与其他交易所不同：
 
 ### 下单
 
-1. 点击插件图标，左上角选择交易所
-2. 选择 **现货** 或 **合约**
-3. 输入交易对（如 `BTC/USDT`）
-4. 选择订单类型：
-   - **市价**：直接填数量，点击买入/卖出
+1. 点击工具栏图标打开侧边栏
+2. 左上角选择 **交易所**
+3. 顶部 Tab 栏右侧切换 **现货 / 合约**
+4. 在交易对输入框中输入关键词搜索（如输入 `BTC` 过滤所有 BTC 交易对）
+5. 选择订单类型：
+   - **市价**：填数量，点击买入/卖出，二次确认后成交
    - **限价**：填价格和数量
    - **止损**：填触发价，可选填委托价（不填则触发后以市价执行）
-5. 点击 **买入** 或 **卖出**
+   - **止盈**：填触发价，可选填委托价
+6. 可用 **25% / 50% / 75% / 全仓** 按钮快速按余额比例填入数量
+7. 点击 **买入** 或 **卖出**
 
-### 查询订单
+### 查询订单与持仓
 
-- **挂单** 标签：查看所有未成交订单，支持一键撤单
-- **历史** 标签：查看最近成交/撤销记录
+切换到 **订单** Tab：
+- **挂单**：查看所有未成交订单，支持一键撤单
+- **历史**：查看最近成交/撤销记录
+- **持仓**（合约模式）：查看当前持仓的开仓价、标记价、未实现盈亏、强平价等
 
-### 余额
+### Coinank 联动
 
-交易界面上方自动显示当前账户余额，按交易对展示对应币种（如 BTC/USDT 显示 BTC 和 USDT 可用余额）。
+在 [coinank.com](https://coinank.com) 浏览某个交易对时，侧边栏会自动切换到对应交易对，无需手动输入。
 
 ---
 
@@ -125,44 +142,43 @@ Hyperliquid 使用 **API 钱包**机制，与其他交易所不同：
 
 | 组件 | 技术 |
 |------|------|
-| Chrome 扩展 | Manifest V3，Service Worker |
+| Chrome 扩展 | Manifest V3，Side Panel API，Service Worker |
 | 交易所接口 | [ccxt](https://github.com/ccxt/ccxt) 4.x 浏览器包 |
 | 构建工具 | esbuild |
 | 签名算法 | 由 ccxt 内部处理（HMAC-SHA256、EIP-712 等） |
 | 数据存储 | `chrome.storage.local`（本地，不同步至云端） |
 
-**为什么选择 ccxt？**
-
-ccxt 是业界最广泛使用的加密货币交易所 API 库，由社区持续维护，覆盖 100+ 交易所。使用 ccxt 的优势：
-
-- 交易所 API 变更时，只需 `npm update ccxt` 即可跟进，无需手动维护签名逻辑
-- 统一接口屏蔽各交易所的参数差异（如 OKX 止损单路由到算法接口、Bitget 路由到计划单接口）
-- 经过大量生产环境验证，稳定可靠
-
 **架构**
 
 ```
-popup.html / options.html
+sidepanel.html / options.html
     │  chrome.runtime.sendMessage
     ▼
 background.js (Service Worker)
     │  importScripts('ccxt.browser.min.js')
-    │  makeExchange() → ccxt 实例（实例级缓存，markets 只加载一次）
+    │  makeExchange() / makePublicExchange()
+    │  实例级缓存，markets TTL 1 小时
     ▼
 ccxt → 各交易所 REST API
+
+content.js (coinank.com)
+    │  检测页面 URL / title 中的交易对
+    │  chrome.runtime.sendMessage({ action: 'pageSymbol' })
+    ▼
+background.js → chrome.storage.local → sidepanel.html 自动同步
 ```
 
-**止损单路由**
+**止损/止盈单路由**
 
-各交易所止损单实现方式不同，ccxt 内部自动处理：
+各交易所止损止盈单实现方式不同，由 background.js 统一适配：
 
-| 交易所 | 实现方式 | ccxt 触发条件 |
-|--------|----------|---------------|
-| Binance | `STOP` / `STOP_MARKET` (合约) `STOP_LOSS_LIMIT` (现货) | `stopLossPrice` 参数 |
-| OKX | `/api/v5/trade/order-algo` (算法单) | `stopLossPrice` 参数 → `ordType=conditional` |
-| Bybit | `triggerPrice` 条件单 | `triggerPrice` + `triggerDirection` 参数 |
-| Bitget | `/v2/mix/order/place-plan-order` (计划单) | `triggerPrice` 参数 → `planType=normal_plan` |
-| Hyperliquid | trigger 订单 | `stopLossPrice` 参数 → trigger 结构 |
+| 交易所 | 止损实现 | 止盈实现 |
+|--------|----------|----------|
+| Binance | `stopLossPrice` 参数 → `STOP_MARKET` / `STOP_LOSS_LIMIT` | `takeProfitPrice` 参数 |
+| OKX | `/order-algo` 算法单，`stopLossPrice` | `/order-algo`，`takeProfitPrice` |
+| Bybit | `triggerPrice` + `triggerDirection: buy=1/sell=2` | `triggerDirection` 方向相反 |
+| Bitget | `triggerPrice` → 计划单接口 | 同止损，方向相反 |
+| Hyperliquid | `stopLossPrice` → trigger 结构 | `takeProfitPrice` → trigger 结构 |
 
 ---
 
@@ -184,23 +200,28 @@ npm run build
 
 ```
 ank-trade/
-├── extension/            # Chrome 插件目录（加载此目录到 Chrome）
+├── extension/              # Chrome 插件目录（加载此目录到 Chrome）
 │   ├── manifest.json
-│   ├── popup.html
-│   ├── options.html
+│   ├── sidepanel.html      # 侧边栏主页面
+│   ├── popup.html          # 保留兼容
+│   ├── options.html        # API Key 设置页
 │   ├── icons/
-│   └── dist/             # 构建产物（自动生成，勿手动修改）
+│   └── dist/               # 构建产物（自动生成，勿手动修改）
 │       ├── background.js
 │       ├── ccxt.browser.min.js
-│       ├── popup.js/css
-│       └── options.js/css
+│       ├── popup.js / popup.css
+│       ├── sidepanel.css
+│       └── options.js / options.css
 ├── src/
-│   ├── background.js     # Service Worker（ccxt 请求路由，~180 行）
-│   ├── popup.js/css      # 交易 UI
-│   └── options.js/css    # API Key 设置页
+│   ├── background.js       # Service Worker（ccxt 请求路由）
+│   ├── popup.js            # 交易 UI 逻辑（sidepanel 共用）
+│   ├── popup.css           # 弹窗样式
+│   ├── sidepanel.css       # 侧边栏样式
+│   ├── content.js          # Coinank 页面交易对检测
+│   └── options.js / css    # API Key 设置页
 └── scripts/
-    ├── build.js          # esbuild 构建脚本
-    └── generate-icons.js # 生成 PNG 图标
+    ├── build.js            # esbuild 构建脚本
+    └── generate-icons.js   # 生成 PNG 图标
 ```
 
 ---
