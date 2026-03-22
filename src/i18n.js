@@ -1335,15 +1335,27 @@ const MESSAGES = {
 };
 
 const LANGS = ['zh_CN', 'zh_TW', 'en', 'ja', 'ko', 'vi', 'tr', 'ru', 'es', 'de', 'pt', 'ar'];
-let _lang = 'zh_CN';
-let _msgs = MESSAGES.zh_CN;
+let _lang = 'en';
+let _msgs = MESSAGES.en;
+
+function detectBrowserLang() {
+  const nav = (navigator.language || 'en').toLowerCase();
+  if (nav.startsWith('zh')) {
+    return (nav.includes('tw') || nav.includes('hk') || nav.includes('hant')) ? 'zh_TW' : 'zh_CN';
+  }
+  const prefix = nav.split('-')[0];
+  const map = { ja: 'ja', ko: 'ko', vi: 'vi', tr: 'tr', ru: 'ru', es: 'es', de: 'de', pt: 'pt', ar: 'ar', en: 'en' };
+  return map[prefix] || 'en';
+}
 
 export async function initLang() {
   const s = await chrome.storage.local.get('lang');
   if (s.lang && MESSAGES[s.lang]) {
     _lang = s.lang;
-    _msgs = MESSAGES[_lang];
+  } else {
+    _lang = detectBrowserLang();
   }
+  _msgs = MESSAGES[_lang];
 }
 
 export function t(key, vars = {}) {
