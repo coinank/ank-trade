@@ -7,6 +7,7 @@ const state = {
   ordersTab:      'open',     // 'open' | 'history' | 'positions'
   symbol:         'BTC/USDT',
   marketType:     'spot',     // 'spot' | 'perp'
+  leverage:       10,
   side:           'buy',
   orderType:      'limit',    // 'market' | 'limit' | 'stop' | 'takeprofit'
   amount:         '',
@@ -93,6 +94,9 @@ function startBalanceRefresh() {
 function render() {
   // 搜索下拉打开时，只更新价格栏，避免销毁 input 导致失焦
   if (state.symOpen) { updatePriceBar(); return; }
+  // 交易所选择器获焦（弹窗可能打开中），同样只刷新价格栏
+  const exSel = document.getElementById('exSel');
+  if (exSel && document.activeElement === exSel) { updatePriceBar(); return; }
   document.getElementById('app').innerHTML = html();
   bind();
 }
@@ -257,6 +261,17 @@ function tradeForm() {
     <div class="input-wrap">
       <input class="input" id="spIn" type="number" value="${state.stopPrice}" placeholder="0.00" min="0" step="any">
       <span class="input-suffix">${quote}</span>
+    </div>
+  </div>` : ''}
+
+  <!-- 杠杆倍数（合约） -->
+  ${isPerp ? `
+  <div class="form-group">
+    <label>${t('label_leverage')}</label>
+    <div class="order-type-tabs">
+      ${[1,2,3,5,10,20,25,50,75,100,125].map(x =>
+        `<button class="type-btn${state.leverage===x?' active':''}" data-lev="${x}">${x}x</button>`
+      ).join('')}
     </div>
   </div>` : ''}
 
@@ -529,6 +544,11 @@ function bind() {
   // ── 触发价格 ──
   q('#spIn')?.addEventListener('input', e => { state.stopPrice = e.target.value; });
 
+  // ── 杠杆倍数 ──
+  qAll('[data-lev]').forEach(b => b.addEventListener('click', () => {
+    state.leverage = parseInt(b.dataset.lev); render();
+  }));
+
   // ── 只减仓 ──
   q('#reduceOnlyChk')?.addEventListener('change', e => { state.reduceOnly = e.target.checked; });
 
@@ -599,6 +619,7 @@ async function submitOrder(confirmed = false) {
       stopPrice:  state.stopPrice,
       marketType: state.marketType,
       reduceOnly: state.reduceOnly,
+      leverage:   state.marketType === 'perp' ? state.leverage : undefined,
     });
     state.loading = false;
     state.amount  = '';

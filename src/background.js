@@ -111,9 +111,14 @@ async function handleMessage({ action, exchange, credentials, params }) {
 }
 
 // ─── 下单（含精度修正）────────────────────────────────────────────────────────
-async function doPlaceOrder(ex, exchangeId, { symbol, side, orderType, amount, price, stopPrice, marketType, reduceOnly }) {
+async function doPlaceOrder(ex, exchangeId, { symbol, side, orderType, amount, price, stopPrice, marketType, reduceOnly, leverage }) {
   // loadMarkets 确保精度数据已加载（TTL 缓存，不会每次都重新请求）
   await ex.loadMarkets();
+
+  // 合约：下单前设置杠杆（忽略错误，不阻断下单流程）
+  if (marketType === 'perp' && leverage && leverage > 0) {
+    try { await ex.setLeverage(leverage, symbol); } catch (_) {}
+  }
 
   const rawAmt = parseFloat(amount);
   if (!rawAmt || rawAmt <= 0) throw new Error('数量必须大于 0');
