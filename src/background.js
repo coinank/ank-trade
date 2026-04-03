@@ -29,7 +29,7 @@ function makeExchange(exchangeId, credentials, marketType) {
   const ExClass = self.ccxt[exchangeId];
   if (!ExClass) throw new Error(`不支持的交易所: ${exchangeId}`);
 
-  const opts = { enableRateLimit: false };
+  const opts = { enableRateLimit: false, timeout: 30000 };
   if (exchangeId === 'hyperliquid') {
     opts.walletAddress = credentials.apiKey;
     opts.privateKey    = credentials.secret;
@@ -53,12 +53,24 @@ function makePublicExchange(exchangeId, marketType) {
   const ExClass = self.ccxt[exchangeId];
   if (!ExClass) throw new Error(`不支持的交易所: ${exchangeId}`);
 
-  const opts = { enableRateLimit: false };
+  const opts = { enableRateLimit: false, timeout: 30000 };
   if (marketType === 'perp') opts.options = { defaultType: 'swap' };
 
   const ex = new ExClass(opts);
   _cache.set(key, ex);
   return ex;
+}
+
+// ─── 速率限制重试 ─────────────────────────────────────────────────────────────
+async function withRetry(fn, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try { return await fn(); } catch (e) {
+      const msg = (e.message || '').toLowerCase();
+      if (!msg.includes('rate limit') && !msg.includes('too many requests') && !msg.includes('429')) throw e;
+      if (i === maxRetries - 1) throw e; // 最后一次直接抛，不再等待
+      await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+    }
+  }
 }
 
 // ─── 消息监听 ─────────────────────────────────────────────────────────────────
@@ -88,7 +100,7 @@ async function handleMessage({ action, exchange, credentials, params }) {
     const ex = (credentials?.apiKey && credentials?.secret)
       ? makeExchange(exchange, credentials, marketType)
       : makePublicExchange(exchange, marketType);
-    if (action === 'getMarkets') return doGetMarkets(ex, params);
+    if (action === 'getMarkets') return withRetry(() => doGetMarkets(ex, params));
     if (action === 'getTicker')  return doGetTicker(ex, params);
   }
 
@@ -102,10 +114,10 @@ async function handleMessage({ action, exchange, credentials, params }) {
   switch (action) {
     case 'placeOrder':      return doPlaceOrder(ex, exchange, params);
     case 'cancelOrder':     return doCancelOrder(ex, exchange, params);
-    case 'getOpenOrders':   return doGetOpenOrders(ex, exchange, params);
-    case 'getOrderHistory': return doGetOrderHistory(ex, exchange, params);
-    case 'getBalance':      return doGetBalance(ex, exchange);
-    case 'getPositions':    return doGetPositions(ex);
+    case 'getOpenOrders':   return withRetry(() => doGetOpenOrders(ex, exchange, params));
+    case 'getOrderHistory': return withRetry(() => doGetOrderHistory(ex, exchange, params));
+    case 'getBalance':      return withRetry(() => doGetBalance(ex, exchange));
+    case 'getPositions':    return withRetry(() => doGetPositions(ex));
     default:                throw new Error(`未知操作: ${action}`);
   }
 }

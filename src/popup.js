@@ -84,10 +84,13 @@ function stopTickerRefresh() {
   if (_tickerTimer) { clearInterval(_tickerTimer); _tickerTimer = null; }
 }
 function startBalanceRefresh() {
-  if (_balanceTimer) return;
+  stopBalanceRefresh();
   _balanceTimer = setInterval(() => {
     if (state.tab === 'trade') silentLoadBalance();
   }, 30000);
+}
+function stopBalanceRefresh() {
+  if (_balanceTimer) { clearInterval(_balanceTimer); _balanceTimer = null; }
 }
 
 // ─── 渲染 ────────────────────────────────────────────────────────────────────
@@ -453,6 +456,7 @@ function bind() {
     silentLoadBalance();
     silentLoadMarkets();
     startTickerRefresh();
+    startBalanceRefresh();
   });
   q('#settingsBtn')?.addEventListener('click', () => chrome.runtime.openOptionsPage());
   q('#langBtn')?.addEventListener('click', async () => {
@@ -476,7 +480,7 @@ function bind() {
     state.markets = []; state.ticker = null;
     if (state.marketType === 'spot' && state.ordersTab === 'positions') state.ordersTab = 'open';
     chrome.storage.local.set({ lastMarket: state.marketType });
-    render(); silentLoadBalance(); silentLoadMarkets(); startTickerRefresh();
+    render(); silentLoadBalance(); silentLoadMarkets(); startTickerRefresh(); startBalanceRefresh();
   }));
 
   qAll('[data-side]').forEach(b => b.addEventListener('click', () => {
