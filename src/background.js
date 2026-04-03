@@ -96,12 +96,13 @@ async function handleMessage({ action, exchange, credentials, params }) {
   const marketType = params?.marketType || 'spot';
 
   // 公开接口：有 credentials 则复用已签名实例，否则用公开实例
-  if (action === 'getMarkets' || action === 'getTicker') {
+  if (action === 'getMarkets' || action === 'getTicker' || action === 'getMarketTickers') {
     const ex = (credentials?.apiKey && credentials?.secret)
       ? makeExchange(exchange, credentials, marketType)
       : makePublicExchange(exchange, marketType);
-    if (action === 'getMarkets') return withRetry(() => doGetMarkets(ex, params));
-    if (action === 'getTicker')  return doGetTicker(ex, params);
+    if (action === 'getMarkets')      return withRetry(() => doGetMarkets(ex, params));
+    if (action === 'getTicker')       return doGetTicker(ex, params);
+    if (action === 'getMarketTickers') return withRetry(() => doGetMarketTickers(ex, params));
   }
 
   // 私有接口：必须有 API Key
@@ -347,6 +348,23 @@ async function doGetTicker(ex, { symbol }) {
     low:    t.low,
     volume: t.baseVolume,
   };
+}
+
+// ─── 批量行情（弹窗用）────────────────────────────────────────────────────────
+async function doGetMarketTickers(ex, { marketType }) {
+  await ex.loadMarkets();
+  const tickers = await ex.fetchTickers();
+  const type = marketType === 'perp' ? 'swap' : 'spot';
+  const result = {};
+  for (const [sym, t] of Object.entries(tickers)) {
+    const mkt = ex.markets[sym];
+    if (!mkt || mkt.type !== type) continue;
+    let change = t.percentage;
+    if (change == null && t.open && t.last)
+      change = ((t.last - t.open) / t.open) * 100;
+    result[sym] = { price: t.last, change };
+  }
+  return result;
 }
 
 // ─── 市场列表 ─────────────────────────────────────────────────────────────────

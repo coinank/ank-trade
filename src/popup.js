@@ -2,29 +2,36 @@ import { initLang, t, langLabel, cycleLang } from './i18n.js';
 
 // ─── 状态 ────────────────────────────────────────────────────────────────────
 const state = {
-  exchange:       'binance',
-  tab:            'trade',    // 'trade' | 'orders'
-  ordersTab:      'open',     // 'open' | 'history' | 'positions'
-  symbol:         'BTC/USDT',
-  marketType:     'spot',     // 'spot' | 'perp'
-  leverage:       10,
-  side:           'buy',
-  orderType:      'limit',    // 'market' | 'limit' | 'stop' | 'takeprofit'
-  amount:         '',
-  price:          '',
-  stopPrice:      '',
-  orders:         [],
-  balance:        null,
-  positions:      [],
-  loading:        false,
-  toast:          null,
-  markets:        [],
-  marketsLoading: false,
-  symSearch:      '',
-  symOpen:        false,
-  ticker:         null,       // { last, bid, ask, change }
-  reduceOnly:     false,
-  confirmPending: false,      // 市价单确认
+  exchange:          'binance',
+  tab:               'trade',    // 'trade' | 'orders'
+  ordersTab:         'open',     // 'open' | 'history' | 'positions'
+  symbol:            'BTC/USDT',
+  marketType:        'spot',     // 'spot' | 'perp'
+  leverage:          10,
+  side:              'buy',
+  orderType:         'limit',    // 'market' | 'limit' | 'stop' | 'takeprofit'
+  amount:            '',
+  price:             '',
+  stopPrice:         '',
+  orders:            [],
+  balance:           null,
+  positions:         [],
+  loading:           false,
+  toast:             null,
+  markets:           [],
+  marketsLoading:    false,
+  symSearch:         '',
+  ticker:            null,       // { last, bid, ask, change }
+  reduceOnly:        false,
+  confirmPending:    false,      // 市价单确认
+  // ── Symbol Modal ──
+  symModalOpen:      false,
+  symFavorites:      [],
+  symMarketFilter:   'all',      // 'fav' | 'all' | 'perp' | 'spot'
+  symTickers:        {},         // { [symbol]: { price, change } }
+  symTickersLoading: false,
+  recentSymbols:     [],
+  symHighlight:      -1,
 };
 
 const EXCHANGES = ['binance', 'okx', 'bybit', 'bitget', 'hyperliquid'];
@@ -42,28 +49,32 @@ const TYPE_KEY = {
 };
 
 // 公开接口（不需要 API Key）
-const PUBLIC_ACTIONS = new Set(['getMarkets', 'getTicker']);
+const PUBLIC_ACTIONS = new Set(['getMarkets', 'getTicker', 'getMarketTickers']);
 
 // ─── 定时器 ───────────────────────────────────────────────────────────────────
-let _tickerTimer  = null;
-let _balanceTimer = null;
+let _tickerTimer      = null;
+let _balanceTimer     = null;
+let _modalTickerTimer = null;
 
 // ─── 初始化 ──────────────────────────────────────────────────────────────────
 async function init() {
   await initLang();
-  const s = await chrome.storage.local.get(['selectedExchange', 'lastSymbol', 'lastMarket', 'coinankSymbol']);
-  if (s.selectedExchange) state.exchange   = s.selectedExchange;
-  if (s.lastSymbol)       state.symbol     = s.lastSymbol;
-  if (s.lastMarket)       state.marketType = s.lastMarket;
-  // Coinank 页面同步的符号优先
-  if (s.coinankSymbol)    state.symbol     = s.coinankSymbol;
+  const s = await chrome.storage.local.get([
+    'selectedExchange', 'lastSymbol', 'lastMarket', 'coinankSymbol',
+    'symFavorites', 'recentSymbols',
+  ]);
+  if (s.selectedExchange)             state.exchange      = s.selectedExchange;
+  if (s.lastSymbol)                   state.symbol        = s.lastSymbol;
+  if (s.lastMarket)                   state.marketType    = s.lastMarket;
+  if (s.coinankSymbol)                state.symbol        = s.coinankSymbol;
+  if (Array.isArray(s.symFavorites))  state.symFavorites  = s.symFavorites;
+  if (Array.isArray(s.recentSymbols)) state.recentSymbols = s.recentSymbols;
   render();
   silentLoadBalance();
   silentLoadMarkets();
   startTickerRefresh();
   startBalanceRefresh();
 
-  // 监听 Coinank content script 推送的符号变化
   chrome.storage.onChanged.addListener(changes => {
     if (changes.coinankSymbol?.newValue && changes.coinankSymbol.newValue !== state.symbol) {
       state.symbol = changes.coinankSymbol.newValue;
@@ -92,56 +103,23 @@ function startBalanceRefresh() {
 function stopBalanceRefresh() {
   if (_balanceTimer) { clearInterval(_balanceTimer); _balanceTimer = null; }
 }
+function stopModalTickerTimer() {
+  if (_modalTickerTimer) { clearInterval(_modalTickerTimer); _modalTickerTimer = null; }
+}
 
 // ─── 渲染 ────────────────────────────────────────────────────────────────────
 function render() {
-  // 搜索下拉打开时，只更新价格栏，避免销毁 input 导致失焦
-  if (state.symOpen) { updatePriceBar(); return; }
-  // 交易所选择器获焦（弹窗可能打开中），同样只刷新价格栏
-  const exSel = document.getElementById('exSel');
-  if (exSel && document.activeElement === exSel) { updatePriceBar(); return; }
+  // 弹窗打开时，抑制后台触发的全量重建（弹窗自行管理列表刷新）
+  if (state.symModalOpen) return;
   document.getElementById('app').innerHTML = html();
   bind();
 }
 
-// 仅刷新价格栏（不重建整个页面）
-function updatePriceBar() {
-  const bar = q('.price-bar');
-  if (!bar) return;
-  const tk  = state.ticker;
-  const chg = tk?.change;
-  const chgClass = chg != null ? (chg >= 0 ? 'chg-up' : 'chg-down') : '';
-  const chgStr   = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
-  bar.innerHTML = `
-    <span class="price-bar-sym">${state.symbol}</span>
-    ${tk ? `
-    <span class="price-bar-price">${fmtPrice(tk.last)}</span>
-    <span class="price-bar-change ${chgClass}">${chgStr}</span>
-    <span class="price-bar-spread">${fmtPrice(tk.bid)} / ${fmtPrice(tk.ask)}</span>
-    ` : `<span class="price-bar-loading">${t('loading_ticker')}</span>`}
-  `;
-}
-
-// 仅刷新交易对下拉容器（不重建整个页面）
-function refreshSymDropdown() {
-  const container = q('#symDropdownContainer');
-  if (!container) return;
-  if (!state.symOpen) { container.innerHTML = ''; return; }
-  container.innerHTML = symDropdown();
-  q('#symDropdownContainer .sym-dropdown')?.addEventListener('mousedown', e => e.preventDefault());
-  qAll('#symDropdownContainer .sym-item').forEach(el => {
-    el.addEventListener('mousedown', e => { e.preventDefault(); selectSymbol(el.dataset.sym); });
-  });
-}
-
-function selectSymbol(sym) {
-  state.symbol   = sym;
-  state.symOpen  = false;
-  state.symSearch = '';
-  state.ticker   = null;
-  chrome.storage.local.set({ lastSymbol: state.symbol });
-  render();
-  startTickerRefresh();
+// 强制渲染（弹窗开关时调用，绕过 symModalOpen 守卫）
+function forceRender() {
+  document.getElementById('app').innerHTML = html();
+  bind();
+  if (state.symModalOpen) bindSymModalEvents();
 }
 
 function html() {
@@ -153,6 +131,7 @@ function html() {
     ${state.tab === 'trade' ? tradeForm() : ordersPanel()}
   </div>
   ${state.toast ? `<div class="toast toast-${state.toast.type}">${state.toast.msg}</div>` : ''}
+  ${state.symModalOpen ? symModal() : ''}
 </div>`;
 }
 
@@ -165,9 +144,6 @@ function header() {
 <header class="header">
   <div class="logo"><div class="logo-dot"></div> Coinank Trader</div>
   <div class="header-right">
-    <select class="exchange-select" id="exSel">
-      ${EXCHANGES.map(e => `<option value="${e}"${state.exchange===e?' selected':''}>${EX_LABEL[e]}</option>`).join('')}
-    </select>
     <button class="btn-icon btn-lang" id="langBtn">${langLabel()}</button>
     <button class="btn-icon" id="settingsBtn" title="${t('settings')}">⚙</button>
   </div>
@@ -201,6 +177,8 @@ function tradeForm() {
   const quote  = quoteCcy();
   const base   = baseCcy();
   const isPerp = state.marketType === 'perp';
+  const typeBadge = isPerp ? 'perp' : 'spot';
+  const typeLabel = isPerp ? t('market_perp') : t('market_spot');
 
   return `
 <div class="trade-form">
@@ -208,15 +186,12 @@ function tradeForm() {
   <!-- 交易对选择 -->
   <div class="form-group">
     <label>${t('label_symbol')}</label>
-    <div class="sym-picker">
-      <div class="sym-input-row">
-        <input class="input" id="symSearch" type="text"
-          value="${state.symbol}"
-          placeholder="${t('search_symbol')}" autocomplete="off">
-        <button class="btn-sym-refresh" id="symRefreshBtn" title="${t('refresh_symbol')}">↻</button>
-      </div>
-      <div id="symDropdownContainer"></div>
-    </div>
+    <button class="sym-trigger-btn" id="openSymModalBtn">
+      <div class="sym-avatar sym-avatar-sm">${base[0]}</div>
+      <span class="sym-trigger-name">${state.symbol}</span>
+      <span class="sym-type-badge ${typeBadge}">${typeLabel}</span>
+      <span class="sym-trigger-arrow">▾</span>
+    </button>
   </div>
 
   <!-- 买卖方向 -->
@@ -303,19 +278,6 @@ function tradeForm() {
 </div>`;
 }
 
-function tickerRow() {
-  const tk = state.ticker;
-  const chg = tk.change;
-  const chgClass = chg >= 0 ? 'chg-up' : 'chg-down';
-  const chgStr = (chg >= 0 ? '+' : '') + (chg || 0).toFixed(2) + '%';
-  return `
-<div class="ticker-row">
-  <span class="ticker-price">${fmtPrice(tk.last)}</span>
-  <span class="ticker-change ${chgClass}">${chgStr}</span>
-  <span class="ticker-spread">${t('spread_bid')} ${fmtPrice(tk.bid)} / ${t('spread_ask')} ${fmtPrice(tk.ask)}</span>
-</div>`;
-}
-
 function pctButtons() {
   return `
 <div class="pct-btns">
@@ -340,19 +302,6 @@ function confirmBox() {
 </div>`;
 }
 
-function symDropdown() {
-  if (state.marketsLoading) {
-    return `<div class="sym-dropdown"><div class="sym-empty">${t('sym_loading')}</div></div>`;
-  }
-  const kw = (state.symSearch || '').toUpperCase();
-  const list = kw ? state.markets.filter(s => s.toUpperCase().includes(kw)) : state.markets;
-  const shown = list.slice(0, 80);
-  if (!shown.length) return `<div class="sym-dropdown"><div class="sym-empty">${state.markets.length ? t('sym_no_match') : t('sym_no_data')}</div></div>`;
-  return `<div class="sym-dropdown">${shown.map(s =>
-    `<div class="sym-item${s===state.symbol?' active':''}" data-sym="${s}">${s}</div>`
-  ).join('')}</div>`;
-}
-
 function balanceBar() {
   const q = quoteCcy();
   const b = baseCcy();
@@ -365,10 +314,353 @@ function balanceBar() {
 </div>`;
 }
 
+// ─── Symbol Modal ─────────────────────────────────────────────────────────────
+function openSymModal() {
+  state.symModalOpen    = true;
+  state.symSearch       = '';
+  state.symHighlight    = -1;
+  state.symMarketFilter = 'all';
+  forceRender();
+  document.getElementById('symSearchInput')?.focus();
+  stopModalTickerTimer();
+  loadModalTickers();
+  _modalTickerTimer = setInterval(loadModalTickers, 30000);
+}
+
+function closeSymModal() {
+  state.symModalOpen = false;
+  state.symTickers   = {};
+  state.symHighlight = -1;
+  stopModalTickerTimer();
+  forceRender();
+}
+
+async function loadModalTickers() {
+  state.symTickersLoading = true;
+  try {
+    const data = await sendMsg('getMarketTickers', { marketType: state.marketType });
+    state.symTickers = data || {};
+  } catch (_) {
+    state.symTickers = {};
+  }
+  state.symTickersLoading = false;
+  refreshSymModal();
+}
+
+function refreshSymModal() {
+  const listEl = document.getElementById('symModalList');
+  if (!listEl) return;
+  listEl.innerHTML = symModalListItems();
+  bindSymModalListEvents();
+}
+
+function symModal() {
+  const isHL = state.exchange === 'hyperliquid';
+  return `
+<div class="sym-modal-overlay" id="symModalOverlay">
+  <div class="sym-modal">
+    <div class="sym-modal-header">
+      <span class="sym-modal-title">搜索交易对</span>
+      <button class="sym-modal-close" id="symModalClose">✕</button>
+    </div>
+    <div class="sym-search-wrap">
+      <span class="sym-search-icon">🔍</span>
+      <input class="sym-search-input" id="symSearchInput" type="text"
+        value="${state.symSearch || ''}" placeholder="BTC, ETH, SOL..."
+        autocomplete="off" spellcheck="false">
+    </div>
+    <div class="sym-exchange-row">
+      ${EXCHANGES.map(ex => {
+        const active = state.exchange === ex ? ' active' : '';
+        return `<button class="ex-chip ex-chip-${ex}${active}" data-ex="${ex}">
+          <span class="ex-chip-icon">${EX_LABEL[ex][0]}</span>
+          <span class="ex-chip-name">${EX_LABEL[ex]}</span>
+        </button>`;
+      }).join('')}
+    </div>
+    <div class="sym-modal-tabs">
+      <button class="sym-tab${state.symMarketFilter==='fav'?' active':''}"  data-filter="fav">⭐ 收藏</button>
+      <button class="sym-tab${state.symMarketFilter==='all'?' active':''}"  data-filter="all">全部</button>
+      <button class="sym-tab${state.symMarketFilter==='perp'?' active':''}" data-filter="perp">永续</button>
+      <button class="sym-tab${state.symMarketFilter==='spot'?' active':''}" data-filter="spot"${isHL?' disabled':''}>现货</button>
+    </div>
+    <div class="sym-list-header">
+      <span></span>
+      <span></span>
+      <span>交易对</span>
+      <span></span>
+      <span class="col-right">价格</span>
+      <span class="col-right">涨跌%</span>
+    </div>
+    <div class="sym-list" id="symModalList">
+      ${symModalListItems()}
+    </div>
+  </div>
+</div>`;
+}
+
+const AVATAR_COLORS = ['#3d7fff','#00c076','#f0b90b','#ff4560','#7B61FF','#00C8D4','#F3BA2F'];
+
+function symModalListItems() {
+  if (state.marketsLoading) {
+    return `<div class="sym-empty">加载中...</div>`;
+  }
+
+  const kw = (state.symSearch || '').toUpperCase().trim();
+  let list = [...state.markets];
+
+  if (state.symMarketFilter === 'fav') {
+    list = state.symFavorites.filter(s => state.markets.includes(s));
+    if (!list.length) {
+      return `<div class="sym-empty">暂无收藏，点击 ★ 添加</div>`;
+    }
+  }
+
+  if (kw) {
+    const prefix   = list.filter(s => s.toUpperCase().startsWith(kw));
+    const contains = list.filter(s => !s.toUpperCase().startsWith(kw) && s.toUpperCase().includes(kw));
+    list = [...prefix, ...contains];
+  } else if (state.symMarketFilter !== 'fav') {
+    const recent = state.recentSymbols.filter(s => list.includes(s));
+    const rest   = list.filter(s => !recent.includes(s));
+    list = [...recent, ...rest];
+  }
+
+  if (!list.length) {
+    return `<div class="sym-empty">${state.markets.length ? '无匹配结果' : '暂无数据'}</div>`;
+  }
+
+  const shown  = list.slice(0, 100);
+  const isPerp = state.marketType === 'perp';
+  const typeBadge = isPerp ? 'perp' : 'spot';
+  const typeLabel = isPerp ? '永续' : '现货';
+
+  return shown.map((s, i) => {
+    const isFav = state.symFavorites.includes(s);
+    const tk    = state.symTickers[s];
+    const priceStr = tk?.price != null ? fmtPrice(tk.price) : '—';
+    const chg   = tk?.change;
+    const chgClass = chg != null ? (chg >= 0 ? 'chg-up' : 'chg-down') : '';
+    const chgStr   = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
+    const base     = s.includes('/') ? s.split('/')[0] : s;
+    const color    = AVATAR_COLORS[base.charCodeAt(0) % AVATAR_COLORS.length];
+    const highlighted = i === state.symHighlight ? ' highlighted' : '';
+    const active   = s === state.symbol ? ' sym-active' : '';
+
+    return `<div class="sym-row${highlighted}${active}" data-sym="${s}" data-idx="${i}">
+      <button class="sym-fav-btn${isFav?' fav-active':''}" data-fav="${s}">★</button>
+      <div class="sym-avatar" style="background:${color}">${base[0]}</div>
+      <span class="sym-row-sym">${s}</span>
+      <span class="sym-type-badge ${typeBadge}">${typeLabel}</span>
+      <span class="sym-row-price">${priceStr}</span>
+      <span class="sym-row-chg ${chgClass}">${chgStr}</span>
+    </div>`;
+  }).join('');
+}
+
+function bindSymModalEvents() {
+  q('#symModalOverlay')?.addEventListener('click', e => {
+    if (e.target.id === 'symModalOverlay') closeSymModal();
+  });
+  q('#symModalClose')?.addEventListener('click', closeSymModal);
+
+  const input = q('#symSearchInput');
+  if (input) {
+    input.addEventListener('input', e => {
+      state.symSearch    = e.target.value;
+      state.symHighlight = -1;
+      refreshSymModal();
+    });
+    input.addEventListener('keydown', handleModalKeydown);
+  }
+
+  qAll('.ex-chip').forEach(btn => btn.addEventListener('click', () => {
+    const ex = btn.dataset.ex;
+    if (ex === state.exchange) return;
+    state.exchange = ex;
+    if (state.exchange === 'hyperliquid') state.marketType = 'perp';
+    chrome.storage.local.set({ selectedExchange: state.exchange });
+    qAll('.ex-chip').forEach(c => c.classList.toggle('active', c.dataset.ex === state.exchange));
+    state.markets    = [];
+    state.symTickers = {};
+    silentLoadMarkets();
+    silentLoadBalance();
+    startTickerRefresh();
+    startBalanceRefresh();
+    stopModalTickerTimer();
+    loadModalTickers();
+    _modalTickerTimer = setInterval(loadModalTickers, 30000);
+  }));
+
+  qAll('.sym-tab').forEach(btn => btn.addEventListener('click', () => {
+    const filter = btn.dataset.filter;
+    // Hyperliquid 不支持现货，忽略点击
+    if (filter === 'spot' && state.exchange === 'hyperliquid') return;
+    state.symMarketFilter = filter;
+    state.symHighlight    = -1;
+    if ((filter === 'perp' || filter === 'spot') && state.marketType !== filter) {
+      state.marketType = filter;
+      state.markets    = [];
+      state.symTickers = {};
+      chrome.storage.local.set({ lastMarket: state.marketType });
+      silentLoadMarkets();
+      stopModalTickerTimer();
+      loadModalTickers();
+      _modalTickerTimer = setInterval(loadModalTickers, 30000);
+    }
+    qAll('.sym-tab').forEach(t => t.classList.toggle('active', t.dataset.filter === filter));
+    refreshSymModal();
+  }));
+
+  bindSymModalListEvents();
+}
+
+function bindSymModalListEvents() {
+  qAll('#symModalList .sym-row').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.closest('.sym-fav-btn')) return;
+      selectSymbol(row.dataset.sym);
+    });
+  });
+  qAll('#symModalList .sym-fav-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      toggleFavorite(btn.dataset.fav);
+    });
+  });
+}
+
+function handleModalKeydown(e) {
+  const items = qAll('#symModalList .sym-row');
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    state.symHighlight = Math.min(state.symHighlight + 1, items.length - 1);
+    refreshSymModal();
+    q('#symModalList .sym-row.highlighted')?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    state.symHighlight = Math.max(state.symHighlight - 1, -1);
+    refreshSymModal();
+    q('#symModalList .sym-row.highlighted')?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    const target = state.symHighlight >= 0 ? items[state.symHighlight] : items[0];
+    if (target) selectSymbol(target.dataset.sym);
+  } else if (e.key === 'Escape') {
+    closeSymModal();
+  }
+}
+
+function toggleFavorite(sym) {
+  const i = state.symFavorites.indexOf(sym);
+  if (i >= 0) state.symFavorites.splice(i, 1);
+  else state.symFavorites.unshift(sym);
+  chrome.storage.local.set({ symFavorites: state.symFavorites });
+  refreshSymModal();
+}
+
+function selectSymbol(sym) {
+  state.symbol        = sym;
+  state.recentSymbols = [sym, ...state.recentSymbols.filter(s => s !== sym)].slice(0, 5);
+  state.symModalOpen  = false;
+  state.symTickers    = {};
+  state.symHighlight  = -1;
+  state.ticker        = null;
+  stopModalTickerTimer();
+  chrome.storage.local.set({ lastSymbol: state.symbol, recentSymbols: state.recentSymbols });
+  forceRender();
+  startTickerRefresh();
+}
+
+// ─── 事件绑定 ─────────────────────────────────────────────────────────────────
+function bind() {
+  q('#settingsBtn')?.addEventListener('click', () => chrome.runtime.openOptionsPage());
+  q('#langBtn')?.addEventListener('click', async () => {
+    await cycleLang();
+    render();
+  });
+
+  qAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
+    state.tab = b.dataset.tab;
+    if (state.tab === 'orders') {
+      if (state.ordersTab === 'positions') loadPositions();
+      else loadOrders();
+    } else {
+      startTickerRefresh();
+    }
+    render();
+  }));
+
+  qAll('[data-mkt]').forEach(b => b.addEventListener('click', () => {
+    state.marketType = b.dataset.mkt;
+    state.markets = []; state.ticker = null;
+    if (state.marketType === 'spot' && state.ordersTab === 'positions') state.ordersTab = 'open';
+    chrome.storage.local.set({ lastMarket: state.marketType });
+    render(); silentLoadBalance(); silentLoadMarkets(); startTickerRefresh(); startBalanceRefresh();
+  }));
+
+  qAll('[data-side]').forEach(b => b.addEventListener('click', () => {
+    state.side = b.dataset.side; render();
+  }));
+  qAll('[data-ot]').forEach(b => b.addEventListener('click', () => {
+    state.orderType = b.dataset.ot; render();
+  }));
+
+  // ── Symbol modal trigger ──
+  q('#openSymModalBtn')?.addEventListener('click', openSymModal);
+
+  // ── 数量输入 + % 快捷按钮 ──
+  q('#amtIn')?.addEventListener('input', e => { state.amount = e.target.value; });
+  qAll('.pct-btn').forEach(b => b.addEventListener('click', () => {
+    const pct = parseInt(b.dataset.pct);
+    const amt = calcPctAmount(pct);
+    if (amt) { state.amount = amt; render(); }
+    else toast(t('msg_fill_price'), 'error');
+  }));
+
+  // ── 价格输入 + 填入最新价 ──
+  q('#pxIn')?.addEventListener('input', e => { state.price = e.target.value; });
+  q('#fillPxBtn')?.addEventListener('click', () => {
+    if (state.ticker?.last) { state.price = String(state.ticker.last); render(); }
+  });
+
+  // ── 触发价格 ──
+  q('#spIn')?.addEventListener('input', e => { state.stopPrice = e.target.value; });
+
+  // ── 杠杆倍数 ──
+  qAll('[data-lev]').forEach(b => b.addEventListener('click', () => {
+    state.leverage = parseInt(b.dataset.lev); render();
+  }));
+
+  // ── 只减仓 ──
+  q('#reduceOnlyChk')?.addEventListener('change', e => { state.reduceOnly = e.target.checked; });
+
+  // ── 下单 / 确认 ──
+  q('#submitBtn')?.addEventListener('click', submitOrder);
+  q('#confirmYes')?.addEventListener('click', () => { submitOrder(true); });
+  q('#confirmNo')?.addEventListener('click',  () => { state.confirmPending = false; render(); });
+
+  // ── 订单 tab ──
+  qAll('[data-otab]').forEach(b => b.addEventListener('click', () => {
+    state.ordersTab = b.dataset.otab;
+    if (state.ordersTab === 'positions') loadPositions();
+    else loadOrders();
+    render();
+  }));
+  q('#refreshBtn')?.addEventListener('click', () => {
+    if (state.ordersTab === 'positions') loadPositions();
+    else loadOrders();
+  });
+
+  qAll('.cancel-btn').forEach(b => b.addEventListener('click', () => {
+    doCancelOrder(b.dataset.oid, b.dataset.sym, b.dataset.isAlgo === '1');
+  }));
+}
+
+// ─── Orders / Positions UI ────────────────────────────────────────────────────
 function ordersPanel() {
   const isPerp    = state.marketType === 'perp';
   const showPos   = isPerp && state.ordersTab === 'positions';
-  const showOrders = !showPos;
 
   return `
 <div>
@@ -442,140 +734,6 @@ function positionCard(p) {
     <div class="pos-row"><span>${t('pos_liq')}</span><span class="liq-price">${p.liquidationPrice || '-'}</span></div>
   </div>
 </div>`;
-}
-
-// ─── 事件绑定 ─────────────────────────────────────────────────────────────────
-function bind() {
-  q('#exSel')?.addEventListener('change', e => {
-    state.exchange = e.target.value;
-    state.markets = []; state.ticker = null;
-    // Hyperliquid 仅支持合约
-    if (state.exchange === 'hyperliquid') state.marketType = 'perp';
-    chrome.storage.local.set({ selectedExchange: state.exchange });
-    render();
-    silentLoadBalance();
-    silentLoadMarkets();
-    startTickerRefresh();
-    startBalanceRefresh();
-  });
-  q('#settingsBtn')?.addEventListener('click', () => chrome.runtime.openOptionsPage());
-  q('#langBtn')?.addEventListener('click', async () => {
-    await cycleLang();
-    render();
-  });
-
-  qAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
-    state.tab = b.dataset.tab;
-    if (state.tab === 'orders') {
-      if (state.ordersTab === 'positions') loadPositions();
-      else loadOrders();
-    } else {
-      startTickerRefresh();
-    }
-    render();
-  }));
-
-  qAll('[data-mkt]').forEach(b => b.addEventListener('click', () => {
-    state.marketType = b.dataset.mkt;
-    state.markets = []; state.ticker = null;
-    if (state.marketType === 'spot' && state.ordersTab === 'positions') state.ordersTab = 'open';
-    chrome.storage.local.set({ lastMarket: state.marketType });
-    render(); silentLoadBalance(); silentLoadMarkets(); startTickerRefresh(); startBalanceRefresh();
-  }));
-
-  qAll('[data-side]').forEach(b => b.addEventListener('click', () => {
-    state.side = b.dataset.side; render();
-  }));
-  qAll('[data-ot]').forEach(b => b.addEventListener('click', () => {
-    state.orderType = b.dataset.ot; render();
-  }));
-
-  // ── 交易对搜索下拉 ──
-  const symIn = q('#symSearch');
-  if (symIn) {
-    symIn.addEventListener('focus', () => {
-      state.symOpen  = true;
-      state.symSearch = state.symbol;
-      symIn.value = state.symbol;
-      symIn.select();
-      refreshSymDropdown();
-    });
-    symIn.addEventListener('input', e => {
-      state.symSearch = e.target.value;
-      refreshSymDropdown();
-    });
-    symIn.addEventListener('blur', () => {
-      setTimeout(() => {
-        if (state.symOpen) {
-          state.symOpen  = false;
-          state.symSearch = '';
-          const el = q('#symSearch');
-          if (el) el.value = state.symbol;
-          refreshSymDropdown();
-        }
-      }, 150);
-    });
-    symIn.addEventListener('keydown', e => {
-      if (e.key === 'Escape') {
-        state.symOpen = false; state.symSearch = '';
-        symIn.value = state.symbol;
-        refreshSymDropdown(); symIn.blur();
-      } else if (e.key === 'Enter') {
-        const first = q('#symDropdownContainer .sym-item');
-        if (first) selectSymbol(first.dataset.sym);
-      }
-    });
-  }
-  q('#symRefreshBtn')?.addEventListener('click', e => {
-    e.stopPropagation(); state.markets = []; silentLoadMarkets(true);
-  });
-
-  // ── 数量输入 + % 快捷按钮 ──
-  q('#amtIn')?.addEventListener('input', e => { state.amount = e.target.value; });
-  qAll('.pct-btn').forEach(b => b.addEventListener('click', () => {
-    const pct = parseInt(b.dataset.pct);
-    const amt = calcPctAmount(pct);
-    if (amt) { state.amount = amt; render(); }
-    else toast(t('msg_fill_price'), 'error');
-  }));
-
-  // ── 价格输入 + 填入最新价 ──
-  q('#pxIn')?.addEventListener('input', e => { state.price = e.target.value; });
-  q('#fillPxBtn')?.addEventListener('click', () => {
-    if (state.ticker?.last) { state.price = String(state.ticker.last); render(); }
-  });
-
-  // ── 触发价格 ──
-  q('#spIn')?.addEventListener('input', e => { state.stopPrice = e.target.value; });
-
-  // ── 杠杆倍数 ──
-  qAll('[data-lev]').forEach(b => b.addEventListener('click', () => {
-    state.leverage = parseInt(b.dataset.lev); render();
-  }));
-
-  // ── 只减仓 ──
-  q('#reduceOnlyChk')?.addEventListener('change', e => { state.reduceOnly = e.target.checked; });
-
-  // ── 下单 / 确认 ──
-  q('#submitBtn')?.addEventListener('click', submitOrder);
-  q('#confirmYes')?.addEventListener('click', () => { submitOrder(true); });
-  q('#confirmNo')?.addEventListener('click',  () => { state.confirmPending = false; render(); });
-
-  // ── 订单 tab ──
-  qAll('[data-otab]').forEach(b => b.addEventListener('click', () => {
-    state.ordersTab = b.dataset.otab;
-    if (state.ordersTab === 'positions') loadPositions();
-    else loadOrders();
-    render();
-  }));
-  q('#refreshBtn')?.addEventListener('click', () => {
-    if (state.ordersTab === 'positions') loadPositions();
-    else loadOrders();
-  });
-
-  qAll('.cancel-btn').forEach(b => b.addEventListener('click', () => {
-    doCancelOrder(b.dataset.oid, b.dataset.sym, b.dataset.isAlgo === '1');
-  }));
 }
 
 // ─── API 调用 ─────────────────────────────────────────────────────────────────
@@ -677,13 +835,15 @@ async function silentLoadBalance() {
 
 async function silentLoadMarkets(forceReload = false) {
   state.marketsLoading = true;
-  if (state.symOpen) refreshSymDropdown(); else render();
+  if (state.symModalOpen) refreshSymModal(); // 弹窗内显示「加载中」
+  else render();
   try {
     const data = await sendMsg('getMarkets', { marketType: state.marketType, forceReload });
     state.markets = Array.isArray(data) ? data : [];
   } catch (_) { state.markets = []; }
   state.marketsLoading = false;
-  if (state.symOpen) refreshSymDropdown(); else render();
+  if (state.symModalOpen) refreshSymModal();
+  else render();
 }
 
 async function silentLoadTicker() {
