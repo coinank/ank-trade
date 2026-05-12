@@ -1,6 +1,6 @@
 {
   "name": "ank-trade",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Coinank Trader - Chrome 加密货币交易插件",
   "scripts": {
     "build":  "node scripts/generate-icons.js && node scripts/build.js",

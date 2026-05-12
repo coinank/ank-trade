@@ -29,7 +29,7 @@ function makeExchange(exchangeId, credentials, marketType) {
   const ExClass = self.ccxt[exchangeId];
   if (!ExClass) throw new Error(`不支持的交易所: ${exchangeId}`);
 
-  const opts = { enableRateLimit: false, timeout: 30000 };
+  const opts = { enableRateLimit: true, timeout: 30000 };
   if (exchangeId === 'hyperliquid') {
     opts.walletAddress = credentials.apiKey;
     opts.privateKey    = credentials.secret;
@@ -53,7 +53,7 @@ function makePublicExchange(exchangeId, marketType) {
   const ExClass = self.ccxt[exchangeId];
   if (!ExClass) throw new Error(`不支持的交易所: ${exchangeId}`);
 
-  const opts = { enableRateLimit: false, timeout: 30000 };
+  const opts = { enableRateLimit: true, timeout: 30000 };
   if (marketType === 'perp') opts.options = { defaultType: 'swap' };
 
   const ex = new ExClass(opts);
@@ -127,10 +127,15 @@ async function handleMessage({ action, exchange, credentials, params }) {
 async function doPlaceOrder(ex, exchangeId, { symbol, side, orderType, amount, price, stopPrice, marketType, reduceOnly, leverage }) {
   // loadMarkets 确保精度数据已加载（TTL 缓存，不会每次都重新请求）
   await ex.loadMarkets();
+  assertOrderMarketType(ex, symbol, marketType);
 
-  // 合约：下单前设置杠杆（忽略错误，不阻断下单流程）
+  // 合约：下单前设置杠杆，失败则阻断，避免实际杠杆与用户选择不一致
   if (marketType === 'perp' && leverage && leverage > 0) {
-    try { await ex.setLeverage(leverage, symbol); } catch (_) {}
+    try {
+      await ex.setLeverage(leverage, symbol);
+    } catch (e) {
+      throw new Error(`设置杠杆失败，已取消下单：${e.message || e}`);
+    }
   }
 
   const rawAmt = parseFloat(amount);
@@ -178,6 +183,25 @@ async function doPlaceOrder(ex, exchangeId, { symbol, side, orderType, amount, p
   throw new Error(`不支持的订单类型: ${orderType}`);
 }
 
+function assertOrderMarketType(ex, symbol, marketType = 'spot') {
+  const market = ex.market(symbol);
+  const expected = marketType === 'perp' ? 'swap' : 'spot';
+  const actual = market.type || (market.swap ? 'swap' : (market.spot ? 'spot' : 'unknown'));
+  const ok = expected === 'swap'
+    ? (market.swap || actual === 'swap')
+    : (market.spot || actual === 'spot');
+  if (!ok) {
+    const expectedLabel = expected === 'swap' ? '合约' : '现货';
+    const actualLabel = actual === 'swap' ? '合约' : (actual === 'spot' ? '现货' : actual);
+    throw new Error(`交易对类型不匹配：当前选择${expectedLabel}，但 ${symbol} 是${actualLabel}交易对。请重新选择${expectedLabel}交易对后再下单。`);
+  }
+  return market;
+}
+
+function orderPrice(price) {
+  return price ?? undefined;
+}
+
 // ─── 止损单 ───────────────────────────────────────────────────────────────────
 async function doStopOrder(ex, exchangeId, symbol, side, amount, limitPrice, stopPrice, marketType, extra) {
   switch (exchangeId) {
@@ -187,20 +211,18 @@ async function doStopOrder(ex, exchangeId, symbol, side, amount, limitPrice, sto
       return ex.createOrder(symbol, execType, side, amount, px, { stopLossPrice: stopPrice, ...extra });
     }
     case 'okx':
-      return ex.createOrder(symbol, 'stop', side, amount, limitPrice, { stopLossPrice: stopPrice, ...extra });
+      return ex.createOrder(symbol, 'stop', side, amount, orderPrice(limitPrice), { stopLossPrice: stopPrice, ...extra });
 
     case 'bybit': {
       const execType = limitPrice ? 'limit' : 'market';
-      return ex.createOrder(symbol, execType, side, amount, limitPrice, {
-        triggerPrice: stopPrice, triggerBy: 'LastPrice',
-        triggerDirection: side === 'buy' ? '1' : '2', ...extra,
-      });
+      return ex.createOrder(symbol, execType, side, amount, orderPrice(limitPrice), { stopLossPrice: stopPrice, ...extra });
     }
     case 'bitget': {
       const execType = limitPrice ? 'limit' : 'market';
-      return ex.createOrder(symbol, execType, side, amount, limitPrice, {
-        triggerPrice: stopPrice, triggerType: 'mark_price', ...extra,
-      });
+      if (marketType !== 'perp') {
+        return ex.createOrder(symbol, execType, side, amount, orderPrice(limitPrice), { triggerPrice: stopPrice, triggerType: 'fill_price', ...extra });
+      }
+      return ex.createOrder(symbol, execType, side, amount, orderPrice(limitPrice), { stopLossPrice: stopPrice, triggerType: 'mark_price', ...extra });
     }
     case 'hyperliquid':
       if (limitPrice) return ex.createOrder(symbol, 'limit', side, amount, limitPrice, { stopLossPrice: stopPrice, ...extra });
@@ -221,21 +243,18 @@ async function doTakeProfitOrder(ex, exchangeId, symbol, side, amount, limitPric
       return ex.createOrder(symbol, execType, side, amount, px, { takeProfitPrice: tpPrice, ...extra });
     }
     case 'okx':
-      return ex.createOrder(symbol, 'stop', side, amount, limitPrice, { takeProfitPrice: tpPrice, ...extra });
+      return ex.createOrder(symbol, 'stop', side, amount, orderPrice(limitPrice), { takeProfitPrice: tpPrice, ...extra });
 
     case 'bybit': {
       const execType = limitPrice ? 'limit' : 'market';
-      // 止盈 triggerDirection 与止损相反
-      return ex.createOrder(symbol, execType, side, amount, limitPrice, {
-        triggerPrice: tpPrice, triggerBy: 'LastPrice',
-        triggerDirection: side === 'buy' ? '2' : '1', ...extra,
-      });
+      return ex.createOrder(symbol, execType, side, amount, orderPrice(limitPrice), { takeProfitPrice: tpPrice, ...extra });
     }
     case 'bitget': {
       const execType = limitPrice ? 'limit' : 'market';
-      return ex.createOrder(symbol, execType, side, amount, limitPrice, {
-        triggerPrice: tpPrice, triggerType: 'mark_price', ...extra,
-      });
+      if (marketType !== 'perp') {
+        return ex.createOrder(symbol, execType, side, amount, orderPrice(limitPrice), { triggerPrice: tpPrice, triggerType: 'fill_price', ...extra });
+      }
+      return ex.createOrder(symbol, execType, side, amount, orderPrice(limitPrice), { takeProfitPrice: tpPrice, triggerType: 'mark_price', ...extra });
     }
     case 'hyperliquid':
       if (limitPrice) return ex.createOrder(symbol, 'limit', side, amount, limitPrice, { takeProfitPrice: tpPrice, ...extra });
@@ -268,11 +287,28 @@ async function doCancelOrder(ex, exchangeId, { symbol, orderId, isAlgo, marketTy
 async function doGetOpenOrders(ex, exchangeId, { symbol }) {
   let orders;
   if (exchangeId === 'okx') {
-    const [regular, algo] = await Promise.all([
-      ex.fetchOpenOrders(symbol).catch(() => []),
+    const [regular, conditional, trigger] = await Promise.all([
+      ex.fetchOpenOrders(symbol),
       ex.fetchOpenOrders(symbol, undefined, undefined, { ordType: 'conditional' }).catch(() => []),
+      ex.fetchOpenOrders(symbol, undefined, undefined, { trigger: true }).catch(() => []),
     ]);
-    orders = [...regular, ...algo];
+    orders = mergeOrders(regular, conditional, trigger);
+  } else if (exchangeId === 'bybit') {
+    const [regular, trigger, tpsl] = await Promise.all([
+      ex.fetchOpenOrders(symbol),
+      ex.fetchOpenOrders(symbol, undefined, undefined, { trigger: true }).catch(() => []),
+      ex.fetchOpenOrders(symbol, undefined, undefined, { orderFilter: 'tpslOrder' }).catch(() => []),
+    ]);
+    orders = mergeOrders(regular, trigger, tpsl);
+  } else if (exchangeId === 'bitget') {
+    const [regular, trigger, normalPlan, stopLossPlan, takeProfitPlan] = await Promise.all([
+      ex.fetchOpenOrders(symbol),
+      ex.fetchOpenOrders(symbol, undefined, undefined, { trigger: true }).catch(() => []),
+      ex.fetchOpenOrders(symbol, undefined, undefined, { trigger: true, planType: 'normal_plan' }).catch(() => []),
+      ex.fetchOpenOrders(symbol, undefined, undefined, { trigger: true, planType: 'pos_loss' }).catch(() => []),
+      ex.fetchOpenOrders(symbol, undefined, undefined, { trigger: true, planType: 'pos_profit' }).catch(() => []),
+    ]);
+    orders = mergeOrders(regular, trigger, normalPlan, stopLossPlan, takeProfitPlan);
   } else {
     orders = await ex.fetchOpenOrders(symbol);
   }
@@ -283,11 +319,28 @@ async function doGetOpenOrders(ex, exchangeId, { symbol }) {
 async function doGetOrderHistory(ex, exchangeId, { symbol, limit = 50 }) {
   let orders;
   if (exchangeId === 'okx') {
-    const [regular, algo] = await Promise.all([
-      ex.fetchClosedOrders(symbol, undefined, limit).catch(() => []),
+    const [regular, conditional, trigger] = await Promise.all([
+      ex.fetchClosedOrders(symbol, undefined, limit),
       ex.fetchClosedOrders(symbol, undefined, limit, { ordType: 'conditional' }).catch(() => []),
+      ex.fetchClosedOrders(symbol, undefined, limit, { trigger: true }).catch(() => []),
     ]);
-    orders = [...regular, ...algo];
+    orders = mergeOrders(regular, conditional, trigger);
+  } else if (exchangeId === 'bybit') {
+    const [regular, trigger, tpsl] = await Promise.all([
+      ex.fetchClosedOrders(symbol, undefined, limit),
+      ex.fetchClosedOrders(symbol, undefined, limit, { trigger: true }).catch(() => []),
+      ex.fetchClosedOrders(symbol, undefined, limit, { orderFilter: 'tpslOrder' }).catch(() => []),
+    ]);
+    orders = mergeOrders(regular, trigger, tpsl);
+  } else if (exchangeId === 'bitget') {
+    const [regular, trigger, normalPlan, stopLossPlan, takeProfitPlan] = await Promise.all([
+      ex.fetchClosedOrders(symbol, undefined, limit),
+      ex.fetchClosedOrders(symbol, undefined, limit, { trigger: true }).catch(() => []),
+      ex.fetchClosedOrders(symbol, undefined, limit, { trigger: true, planType: 'normal_plan' }).catch(() => []),
+      ex.fetchClosedOrders(symbol, undefined, limit, { trigger: true, planType: 'pos_loss' }).catch(() => []),
+      ex.fetchClosedOrders(symbol, undefined, limit, { trigger: true, planType: 'pos_profit' }).catch(() => []),
+    ]);
+    orders = mergeOrders(regular, trigger, normalPlan, stopLossPlan, takeProfitPlan);
   } else {
     orders = await ex.fetchClosedOrders(symbol, undefined, limit);
   }
@@ -387,22 +440,41 @@ async function doGetMarkets(ex, { marketType, forceReload }) {
 const ALGO_TYPES = new Set([
   'stop', 'stop_loss_limit', 'stop_market', 'stop_loss',
   'take_profit', 'take_profit_market', 'take_profit_limit',
-  'conditional', 'trigger',
+  'conditional', 'trigger', 'tpslorder',
 ]);
 
+function mergeOrders(...lists) {
+  const seen = new Set();
+  const result = [];
+  for (const list of lists) {
+    for (const order of (list || [])) {
+      const key = `${order.id || ''}:${order.symbol || ''}:${order.type || ''}:${order.timestamp || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(order);
+    }
+  }
+  return result;
+}
+
 function normalizeOrders(orders) {
-  return (orders || []).map(o => ({
-    id:        String(o.id),
-    symbol:    o.symbol,
-    side:      o.side,
-    type:      o.type,
-    amount:    String(o.amount ?? ''),
-    price:     o.price       ? String(o.price)       : '',
-    stopPrice: o.stopPrice   ? String(o.stopPrice)   :
-               o.triggerPrice ? String(o.triggerPrice) : '',
-    status:    o.status,
-    time:      o.timestamp,
-    isAlgo:    ALGO_TYPES.has((o.type || '').toLowerCase()),
-    raw:       o,
-  }));
+  return (orders || []).map(o => {
+    const triggerPx = o.stopPrice ?? o.triggerPrice ?? o.stopLossPrice ?? o.takeProfitPrice;
+    const isAlgo = ALGO_TYPES.has((o.type || '').toLowerCase()) || triggerPx != null;
+    return {
+      id:              String(o.id),
+      symbol:          o.symbol,
+      side:            o.side,
+      type:            o.type,
+      amount:          String(o.amount ?? ''),
+      price:           o.price           ? String(o.price)           : '',
+      stopPrice:       triggerPx != null ? String(triggerPx)         : '',
+      stopLossPrice:   o.stopLossPrice   ? String(o.stopLossPrice)   : '',
+      takeProfitPrice: o.takeProfitPrice ? String(o.takeProfitPrice) : '',
+      status:          o.status,
+      time:            o.timestamp,
+      isAlgo,
+      raw:             o,
+    };
+  });
 }

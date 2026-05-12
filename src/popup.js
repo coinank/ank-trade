@@ -67,20 +67,21 @@ async function init() {
   if (s.lastSymbol)                   state.symbol        = s.lastSymbol;
   if (s.lastMarket)                   state.marketType    = s.lastMarket;
   if (s.coinankSymbol)                state.symbol        = s.coinankSymbol;
+  if (state.exchange === 'hyperliquid') state.marketType = 'perp';
   if (Array.isArray(s.symFavorites))  state.symFavorites  = s.symFavorites;
   if (Array.isArray(s.recentSymbols)) state.recentSymbols = s.recentSymbols;
   render();
   silentLoadBalance();
-  silentLoadMarkets();
-  startTickerRefresh();
+  await reloadMarketsThenTicker();
   startBalanceRefresh();
 
   chrome.storage.onChanged.addListener(changes => {
     if (changes.coinankSymbol?.newValue && changes.coinankSymbol.newValue !== state.symbol) {
       state.symbol = changes.coinankSymbol.newValue;
       state.ticker = null;
+      syncSymbolToLoadedMarkets();
       render();
-      startTickerRefresh();
+      reloadMarketsThenTicker();
     }
   });
 }
@@ -479,13 +480,12 @@ function bindSymModalEvents() {
     if (ex === state.exchange) return;
     state.exchange = ex;
     if (state.exchange === 'hyperliquid') state.marketType = 'perp';
-    chrome.storage.local.set({ selectedExchange: state.exchange });
+    chrome.storage.local.set({ selectedExchange: state.exchange, lastMarket: state.marketType });
     qAll('.ex-chip').forEach(c => c.classList.toggle('active', c.dataset.ex === state.exchange));
     state.markets    = [];
     state.symTickers = {};
-    silentLoadMarkets();
     silentLoadBalance();
-    startTickerRefresh();
+    reloadMarketsThenTicker();
     startBalanceRefresh();
     stopModalTickerTimer();
     loadModalTickers();
@@ -503,7 +503,7 @@ function bindSymModalEvents() {
       state.markets    = [];
       state.symTickers = {};
       chrome.storage.local.set({ lastMarket: state.marketType });
-      silentLoadMarkets();
+      reloadMarketsThenTicker();
       stopModalTickerTimer();
       loadModalTickers();
       _modalTickerTimer = setInterval(loadModalTickers, 30000);
@@ -596,7 +596,7 @@ function bind() {
     state.markets = []; state.ticker = null;
     if (state.marketType === 'spot' && state.ordersTab === 'positions') state.ordersTab = 'open';
     chrome.storage.local.set({ lastMarket: state.marketType });
-    render(); silentLoadBalance(); silentLoadMarkets(); startTickerRefresh(); startBalanceRefresh();
+    render(); silentLoadBalance(); reloadMarketsThenTicker(); startBalanceRefresh();
   }));
 
   qAll('[data-side]').forEach(b => b.addEventListener('click', () => {
@@ -834,16 +834,49 @@ async function silentLoadBalance() {
 }
 
 async function silentLoadMarkets(forceReload = false) {
+  const requestedExchange = state.exchange;
+  const requestedMarketType = state.marketType;
   state.marketsLoading = true;
   if (state.symModalOpen) refreshSymModal(); // 弹窗内显示「加载中」
   else render();
   try {
     const data = await sendMsg('getMarkets', { marketType: state.marketType, forceReload });
+    if (state.exchange !== requestedExchange || state.marketType !== requestedMarketType) return false;
     state.markets = Array.isArray(data) ? data : [];
-  } catch (_) { state.markets = []; }
+    syncSymbolToLoadedMarkets();
+  } catch (_) {
+    if (state.exchange !== requestedExchange || state.marketType !== requestedMarketType) return false;
+    state.markets = [];
+  }
   state.marketsLoading = false;
   if (state.symModalOpen) refreshSymModal();
   else render();
+  return true;
+}
+
+async function reloadMarketsThenTicker(forceReload = false) {
+  const ok = await silentLoadMarkets(forceReload);
+  if (ok) startTickerRefresh();
+}
+
+function syncSymbolToLoadedMarkets() {
+  if (!state.markets.length || state.markets.includes(state.symbol)) return;
+  const base  = baseCcy();
+  const quote = quoteCcy();
+  const preferred = state.marketType === 'perp'
+    ? [`${base}/${quote}:${quote}`, `${base}/USDT:USDT`, `${base}/USDC:USDC`]
+    : [`${base}/${quote}`];
+  let next = preferred.find(sym => state.markets.includes(sym));
+  if (!next) {
+    next = state.markets.find(sym => {
+      const [b, rest = ''] = sym.split('/');
+      return b.toUpperCase() === base && rest.split(':')[0].toUpperCase() === quote;
+    });
+  }
+  if (!next) return;
+  state.symbol = next;
+  state.ticker = null;
+  chrome.storage.local.set({ lastSymbol: state.symbol });
 }
 
 async function silentLoadTicker() {

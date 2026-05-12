@@ -2,7 +2,7 @@
 
 > 专为加密货币交易者设计的 Chrome 侧边栏插件，支持五大主流交易所的快捷下单、实时行情、订单管理和持仓查看。
 
-![版本](https://img.shields.io/badge/版本-1.0.0-blue) ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green) ![ccxt](https://img.shields.io/badge/ccxt-4.x-orange)
+![版本](https://img.shields.io/badge/版本-1.0.1-blue) ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green) ![ccxt](https://img.shields.io/badge/ccxt-4.x-orange)
 
 ---
 
@@ -27,6 +27,17 @@
 
 ---
 
+## v1.0.1 更新
+
+- 增加交易执行层市场类型校验：合约模式只允许 CCXT `swap` 交易对，现货模式只允许 `spot` 交易对，避免 UI 状态不同步时误下到错误市场。
+- 合约下单前设置杠杆失败时会直接取消下单，不再静默继续提交订单。
+- Bybit / Bitget 合约止损止盈改用 CCXT 统一 `stopLossPrice` / `takeProfitPrice` 语义。
+- 补全 OKX / Bybit / Bitget 条件单、止损止盈单的查询和撤单路径。
+- 切换现货 / 合约时自动同步到匹配的交易对，例如 `BTC/USDT` → `BTC/USDT:USDT`；找不到安全匹配时不自动猜测。
+- Release 包：`release/coinank-trader-v1.0.1.zip`
+
+---
+
 ## 支持交易所
 
 | 交易所 | 现货 | 永续合约 | 止损单 | 止盈单 | 备注 |
@@ -43,7 +54,7 @@
 
 ### 方式一：直接下载（推荐）
 
-1. 前往 [Releases](https://github.com/coinank/ank-trade/releases) 下载最新的 `coinank-trader-vX.X.X.zip`
+1. 前往 [Releases](https://github.com/coinank/ank-trade/releases) 下载最新的 `coinank-trader-vX.X.X.zip`（当前版本：`coinank-trader-v1.0.1.zip`）
 2. 解压 zip 文件
 3. 打开 Chrome，访问 `chrome://extensions`
 4. 右上角开启 **开发者模式**
@@ -176,9 +187,16 @@ background.js → chrome.storage.local → sidepanel.html 自动同步
 |--------|----------|----------|
 | Binance | `stopLossPrice` 参数 → `STOP_MARKET` / `STOP_LOSS_LIMIT` | `takeProfitPrice` 参数 |
 | OKX | `/order-algo` 算法单，`stopLossPrice` | `/order-algo`，`takeProfitPrice` |
-| Bybit | `triggerPrice` + `triggerDirection: buy=1/sell=2` | `triggerDirection` 方向相反 |
-| Bitget | `triggerPrice` → 计划单接口 | 同止损，方向相反 |
+| Bybit | `stopLossPrice` 参数 | `takeProfitPrice` 参数 |
+| Bitget | 合约使用 `stopLossPrice`；现货触发单使用 `triggerPrice` | 合约使用 `takeProfitPrice`；现货触发单使用 `triggerPrice` |
 | Hyperliquid | `stopLossPrice` → trigger 结构 | `takeProfitPrice` → trigger 结构 |
+
+**交易安全保护**
+
+- `background.js` 是插件的交易执行层，所有下单请求都会在这里再次校验交易对类型，不依赖 UI 状态作为唯一保护。
+- 若 `marketType=perp` 但传入现货 symbol（如 `BTC/USDT`），或 `marketType=spot` 但传入合约 symbol（如 `BTC/USDT:USDT`），请求会被拒绝。
+- 合约杠杆设置失败时不会继续下单，避免实际杠杆与用户选择不一致。
+- CCXT 内置限频已启用，减少连续查询 / 下单触发交易所限频的风险。
 
 ---
 
