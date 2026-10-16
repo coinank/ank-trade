@@ -1,6 +1,9 @@
 // ─── 多语言翻译模块 ───────────────────────────────────────────────────────────
 const MESSAGES = {
   zh_CN: {
+    order_unknown:       '{exchange} {symbol} 的订单结果未确认。请在交易所核对订单与成交记录（委托标识：{id}），核对前已暂停新下单。',
+    order_checked:       '已核对交易所订单，继续交易',
+    confirm_order_checked: '确认已核对以上全部订单的挂单、成交和持仓状态？解除后可提交新的订单。',
     settings:            '设置',
     loading_ticker:      '行情加载中...',
     tab_trade:           '交易',
@@ -114,6 +117,9 @@ const MESSAGES = {
   },
 
   zh_TW: {
+    order_unknown:       '{exchange} {symbol} 的訂單結果未確認。請在交易所核對訂單與成交紀錄（委託標識：{id}），核對前已暫停新下單。',
+    order_checked:       '已核對交易所訂單，繼續交易',
+    confirm_order_checked: '確認已核對以上全部訂單的掛單、成交和持倉狀態？解除後可提交新的訂單。',
     settings:            '設定',
     loading_ticker:      '行情載入中...',
     tab_trade:           '交易',
@@ -226,6 +232,9 @@ const MESSAGES = {
   },
 
   en: {
+    order_unknown:       'The result of your {exchange} {symbol} order is unknown. Check open orders, fills and positions at the exchange (client order ID: {id}). New orders are paused until you verify it.',
+    order_checked:       'I checked the exchange orders; continue trading',
+    confirm_order_checked: 'Have you verified open orders, fills and positions for every order above? Continuing allows new orders.',
     settings:            'Settings',
     loading_ticker:      'Loading...',
     tab_trade:           'Trade',
@@ -1371,7 +1380,7 @@ export async function initLang() {
 }
 
 export function t(key, vars = {}) {
-  let str = _msgs[key] ?? MESSAGES.zh_CN[key] ?? key;
+  let str = _msgs[key] ?? MESSAGES.en[key] ?? MESSAGES.zh_CN[key] ?? key;
   for (const [k, v] of Object.entries(vars)) {
     str = str.replace(new RegExp(`\\{${k}\\}`, 'g'), v);
   }

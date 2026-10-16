@@ -12,24 +12,24 @@
     const full  = (path + search).toLowerCase();
 
     // 常见 quote 货币，按长度降序避免 USDT 匹配到 USD
-    const quotes = ['usdt', 'busd', 'usdc', 'btc', 'eth', 'bnb'];
+    const quotes = ['usdt', 'busd', 'usdc', 'usd', 'btc', 'eth', 'bnb'];
 
     for (const q of quotes) {
       // 匹配 URL 片段如 /btcusdt /eth-usdt /BTC_USDT
-      const re = new RegExp(`[/_-]([a-z]{2,10})[/_-]?${q}(?:[/_?#&]|$)`);
+      const re = new RegExp(`(?:^|[/_?&=-])([a-z0-9]{1,20})[/_-]?${q}(?:[/_?#&]|$)`);
       const m  = full.match(re);
       if (m) {
         const base = m[1].toUpperCase();
-        if (base.length >= 2 && base.length <= 10)
+        if (base.length >= 1 && base.length <= 20)
           return `${base}/${q.toUpperCase()}`;
       }
     }
 
     // 从 document.title 提取，如 "BTC/USDT | Coinank" 或 "BTCUSDT 价格"
-    const t1 = document.title.match(/\b([A-Z]{2,10})\/([A-Z]{2,8})\b/);
+    const t1 = document.title.toUpperCase().match(/\b([A-Z0-9]{1,20})\/([A-Z]{2,8})\b/);
     if (t1) return `${t1[1]}/${t1[2]}`;
 
-    const t2 = document.title.match(/\b([A-Z]{2,10})(USDT|BUSD|USDC|BTC|ETH)\b/);
+    const t2 = document.title.toUpperCase().match(/\b([A-Z0-9]{1,20}?)(USDT|BUSD|USDC|USD|BTC|ETH|BNB)\b/);
     if (t2) return `${t2[1]}/${t2[2]}`;
 
     // 尝试读取页面中常见的符号元素
@@ -37,9 +37,15 @@
       '[data-symbol],[data-pair],[class*="symbol"],[class*="ticker-symbol"]'
     );
     if (el) {
-      const text = (el.textContent || el.getAttribute('data-symbol') || '').trim().toUpperCase();
-      const m2 = text.match(/^([A-Z]{2,10})\/?([A-Z]{2,8})$/);
-      if (m2) return `${m2[1]}/${m2[2]}`;
+      const text = (el.getAttribute('data-symbol') || el.getAttribute('data-pair') || el.textContent || '').trim().toUpperCase();
+      const separated = text.match(/^([A-Z0-9]{1,20})[/_-]([A-Z]{2,8})$/);
+      if (separated) return `${separated[1]}/${separated[2]}`;
+      for (const q of quotes) {
+        const quote = q.toUpperCase();
+        if (text.endsWith(quote) && /^[A-Z0-9]{1,20}$/.test(text.slice(0, -quote.length))) {
+          return `${text.slice(0, -quote.length)}/${quote}`;
+        }
+      }
     }
 
     return null;

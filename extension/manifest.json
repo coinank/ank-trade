@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Coinank Trader",
-  "version": "1.0.1",
+  "version": "1.0.3",
+  "minimum_chrome_version": "120",
   "description": "快速加密货币交易助手 - 支持 Binance OKX Bybit Bitget Hyperliquid",
   "permissions": ["storage", "sidePanel", "alarms"],
   "host_permissions": [
     "https://api.binance.com/*",
     "https://api1.binance.com/*",
     "https://fapi.binance.com/*",
+    "https://dapi.binance.com/*",
     "https://www.okx.com/*",
     "https://api.bybit.com/*",
     "https://api.bitget.com/*",

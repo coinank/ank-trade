@@ -17,6 +17,13 @@ const state = {
   balance:           null,
   positions:         [],
   loading:           false,
+  submitting:        false,
+  ordersError:       null,
+  ordersWarning:     null,
+  confirmOrder:      null,
+  uncertainOrders:   [],
+  activeRequestId:   null,
+  acknowledging:    false,
   toast:             null,
   markets:           [],
   marketsLoading:    false,
@@ -49,12 +56,49 @@ const TYPE_KEY = {
 };
 
 // 公开接口（不需要 API Key）
-const PUBLIC_ACTIONS = new Set(['getMarkets', 'getTicker', 'getMarketTickers']);
+const PUBLIC_ACTIONS = new Set(['getMarkets', 'getTicker', 'getMarketTickers', 'acknowledgeOrder']);
 
 // ─── 定时器 ───────────────────────────────────────────────────────────────────
 let _tickerTimer      = null;
 let _balanceTimer     = null;
 let _modalTickerTimer = null;
+let _contextVersion = 0;
+let _tickerRequest = 0;
+let _tickerPending = null;
+let _balanceRequest = 0;
+let _ordersRequest = 0;
+let _positionsRequest = 0;
+let _marketsRequest = 0;
+let _modalRequest = 0;
+let _pendingRequest = 0;
+
+function currentContext() {
+  return `${_contextVersion}:${state.exchange}:${state.marketType}:${state.symbol}`;
+}
+
+function resetTradingContext() {
+  _contextVersion++;
+  state.ticker = null; state.balance = null;
+  state.orders = []; state.positions = []; state.ordersError = null; state.ordersWarning = null;
+  state.amount = ''; state.price = ''; state.stopPrice = '';
+  state.confirmPending = false; state.confirmOrder = null;
+  stopTickerRefresh();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function refreshPendingOrders() {
+  const request = ++_pendingRequest;
+  const pending = await chrome.storage.local.get(null);
+  if (request !== _pendingRequest) return;
+  state.uncertainOrders = Object.entries(pending)
+    .filter(([key, value]) => key.startsWith('pendingTrade_') && /^[a-f0-9]{32}$/.test(value?.params?.requestId || '') &&
+      EXCHANGES.includes(value.exchange) && value.params.requestId !== state.activeRequestId)
+    .map(([, value]) => value);
+  render();
+}
 
 // ─── 初始化 ──────────────────────────────────────────────────────────────────
 async function init() {
@@ -70,20 +114,22 @@ async function init() {
   if (state.exchange === 'hyperliquid') state.marketType = 'perp';
   if (Array.isArray(s.symFavorites))  state.symFavorites  = s.symFavorites;
   if (Array.isArray(s.recentSymbols)) state.recentSymbols = s.recentSymbols;
-  render();
-  silentLoadBalance();
-  await reloadMarketsThenTicker();
-  startBalanceRefresh();
-
-  chrome.storage.onChanged.addListener(changes => {
+  chrome.storage.onChanged.addListener(async changes => {
+    if (Object.keys(changes).some(key => key.startsWith('pendingTrade_'))) {
+      await refreshPendingOrders();
+    }
     if (changes.coinankSymbol?.newValue && changes.coinankSymbol.newValue !== state.symbol) {
+      resetTradingContext();
       state.symbol = changes.coinankSymbol.newValue;
-      state.ticker = null;
       syncSymbolToLoadedMarkets();
       render();
       reloadMarketsThenTicker();
     }
   });
+  await refreshPendingOrders();
+  silentLoadBalance();
+  await reloadMarketsThenTicker();
+  startBalanceRefresh();
 }
 
 // ─── 定时刷新 ─────────────────────────────────────────────────────────────────
@@ -112,8 +158,10 @@ function stopModalTickerTimer() {
 function render() {
   // 弹窗打开时，抑制后台触发的全量重建（弹窗自行管理列表刷新）
   if (state.symModalOpen) return;
+  const focused = document.activeElement?.id;
   document.getElementById('app').innerHTML = html();
   bind();
+  if (['amtIn', 'pxIn', 'spIn'].includes(focused)) document.getElementById(focused)?.focus({ preventScroll: true });
 }
 
 // 强制渲染（弹窗开关时调用，绕过 symModalOpen 守卫）
@@ -129,9 +177,14 @@ function html() {
   ${header()}
   ${tabs()}
   <div class="content">
+    ${state.uncertainOrders.map(order => `<div class="confirm-box"><p>${escapeHtml(t('order_unknown', {
+      exchange: EX_LABEL[order.exchange], symbol: order.params.symbol,
+      id: order.exchange === 'hyperliquid' ? `0x${order.params.requestId}` : `ank${order.params.requestId.slice(0, 29)}`,
+    }))}</p></div>`).join('')}
+    ${state.uncertainOrders.length ? `<button class="btn-confirm-no" id="ackUnknownOrder"${state.acknowledging?' disabled':''}>${t('order_checked')}</button>` : ''}
     ${state.tab === 'trade' ? tradeForm() : ordersPanel()}
   </div>
-  ${state.toast ? `<div class="toast toast-${state.toast.type}">${state.toast.msg}</div>` : ''}
+  ${state.toast ? `<div class="toast toast-${state.toast.type}">${escapeHtml(state.toast.msg)}</div>` : ''}
   ${state.symModalOpen ? symModal() : ''}
 </div>`;
 }
@@ -150,7 +203,7 @@ function header() {
   </div>
 </header>
 <div class="price-bar">
-  <span class="price-bar-sym">${state.symbol}</span>
+  <span class="price-bar-sym">${escapeHtml(state.symbol)}</span>
   ${tk ? `
   <span class="price-bar-price">${fmtPrice(tk.last)}</span>
   <span class="price-bar-change ${chgClass}">${chgStr}</span>
@@ -189,7 +242,7 @@ function tradeForm() {
     <label>${t('label_symbol')}</label>
     <button class="sym-trigger-btn" id="openSymModalBtn">
       <div class="sym-avatar sym-avatar-sm">${base[0]}</div>
-      <span class="sym-trigger-name">${state.symbol}</span>
+      <span class="sym-trigger-name">${escapeHtml(state.symbol)}</span>
       <span class="sym-type-badge ${typeBadge}">${typeLabel}</span>
       <span class="sym-trigger-arrow">▾</span>
     </button>
@@ -272,8 +325,8 @@ function tradeForm() {
 
   <!-- 确认框（市价单） -->
   ${state.confirmPending ? confirmBox() : `
-  <button class="submit-btn ${state.side}" id="submitBtn"${state.loading?' disabled':''}>
-    ${state.loading ? t('submitting') : submitLabel()}
+  <button class="submit-btn ${state.side}" id="submitBtn"${state.submitting || state.marketsLoading || state.uncertainOrders.length?' disabled':''}>
+    ${state.submitting ? t('submitting') : submitLabel()}
   </button>`}
 
 </div>`;
@@ -337,11 +390,15 @@ function closeSymModal() {
 }
 
 async function loadModalTickers() {
+  const context = currentContext();
+  const request = ++_modalRequest;
   state.symTickersLoading = true;
   try {
     const data = await sendMsg('getMarketTickers', { marketType: state.marketType });
+    if (context !== currentContext() || request !== _modalRequest || !state.symModalOpen) return;
     state.symTickers = data || {};
   } catch (_) {
+    if (context !== currentContext() || request !== _modalRequest) return;
     state.symTickers = {};
   }
   state.symTickersLoading = false;
@@ -367,7 +424,7 @@ function symModal() {
     <div class="sym-search-wrap">
       <span class="sym-search-icon">🔍</span>
       <input class="sym-search-input" id="symSearchInput" type="text"
-        value="${state.symSearch || ''}" placeholder="BTC, ETH, SOL..."
+        value="${escapeHtml(state.symSearch)}" placeholder="BTC, ETH, SOL..."
         autocomplete="off" spellcheck="false">
     </div>
     <div class="sym-exchange-row">
@@ -437,6 +494,7 @@ function symModalListItems() {
   const typeLabel = isPerp ? '永续' : '现货';
 
   return shown.map((s, i) => {
+    const safeSymbol = escapeHtml(s);
     const isFav = state.symFavorites.includes(s);
     const tk    = state.symTickers[s];
     const priceStr = tk?.price != null ? fmtPrice(tk.price) : '—';
@@ -448,10 +506,10 @@ function symModalListItems() {
     const highlighted = i === state.symHighlight ? ' highlighted' : '';
     const active   = s === state.symbol ? ' sym-active' : '';
 
-    return `<div class="sym-row${highlighted}${active}" data-sym="${s}" data-idx="${i}">
-      <button class="sym-fav-btn${isFav?' fav-active':''}" data-fav="${s}">★</button>
+    return `<div class="sym-row${highlighted}${active}" data-sym="${safeSymbol}" data-idx="${i}">
+      <button class="sym-fav-btn${isFav?' fav-active':''}" data-fav="${safeSymbol}">★</button>
       <div class="sym-avatar" style="background:${color}">${base[0]}</div>
-      <span class="sym-row-sym">${s}</span>
+      <span class="sym-row-sym">${safeSymbol}</span>
       <span class="sym-type-badge ${typeBadge}">${typeLabel}</span>
       <span class="sym-row-price">${priceStr}</span>
       <span class="sym-row-chg ${chgClass}">${chgStr}</span>
@@ -478,6 +536,7 @@ function bindSymModalEvents() {
   qAll('.ex-chip').forEach(btn => btn.addEventListener('click', () => {
     const ex = btn.dataset.ex;
     if (ex === state.exchange) return;
+    resetTradingContext();
     state.exchange = ex;
     if (state.exchange === 'hyperliquid') state.marketType = 'perp';
     chrome.storage.local.set({ selectedExchange: state.exchange, lastMarket: state.marketType });
@@ -499,10 +558,12 @@ function bindSymModalEvents() {
     state.symMarketFilter = filter;
     state.symHighlight    = -1;
     if ((filter === 'perp' || filter === 'spot') && state.marketType !== filter) {
+      resetTradingContext();
       state.marketType = filter;
       state.markets    = [];
       state.symTickers = {};
       chrome.storage.local.set({ lastMarket: state.marketType });
+      silentLoadBalance();
       reloadMarketsThenTicker();
       stopModalTickerTimer();
       loadModalTickers();
@@ -560,6 +621,7 @@ function toggleFavorite(sym) {
 }
 
 function selectSymbol(sym) {
+  if (sym !== state.symbol) resetTradingContext();
   state.symbol        = sym;
   state.recentSymbols = [sym, ...state.recentSymbols.filter(s => s !== sym)].slice(0, 5);
   state.symModalOpen  = false;
@@ -569,11 +631,26 @@ function selectSymbol(sym) {
   stopModalTickerTimer();
   chrome.storage.local.set({ lastSymbol: state.symbol, recentSymbols: state.recentSymbols });
   forceRender();
+  silentLoadBalance();
   startTickerRefresh();
 }
 
 // ─── 事件绑定 ─────────────────────────────────────────────────────────────────
 function bind() {
+  q('#ackUnknownOrder')?.addEventListener('click', async () => {
+    if (state.acknowledging) return;
+    if (!confirm(t('confirm_order_checked'))) return;
+    state.acknowledging = true; render();
+    try {
+      const orders = [...state.uncertainOrders];
+      for (const order of orders) await sendMsg('acknowledgeOrder', { requestId: order.params.requestId }, order.exchange);
+      await refreshPendingOrders();
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      state.acknowledging = false; render();
+    }
+  });
   q('#settingsBtn')?.addEventListener('click', () => chrome.runtime.openOptionsPage());
   q('#langBtn')?.addEventListener('click', async () => {
     await cycleLang();
@@ -592,11 +669,17 @@ function bind() {
   }));
 
   qAll('[data-mkt]').forEach(b => b.addEventListener('click', () => {
+    if (state.marketType === b.dataset.mkt) return;
+    resetTradingContext();
     state.marketType = b.dataset.mkt;
     state.markets = []; state.ticker = null;
     if (state.marketType === 'spot' && state.ordersTab === 'positions') state.ordersTab = 'open';
     chrome.storage.local.set({ lastMarket: state.marketType });
-    render(); silentLoadBalance(); reloadMarketsThenTicker(); startBalanceRefresh();
+    render(); silentLoadBalance();
+    reloadMarketsThenTicker().then(() => {
+      if (state.tab === 'orders') state.ordersTab === 'positions' ? loadPositions() : loadOrders();
+    });
+    startBalanceRefresh();
   }));
 
   qAll('[data-side]').forEach(b => b.addEventListener('click', () => {
@@ -611,8 +694,16 @@ function bind() {
 
   // ── 数量输入 + % 快捷按钮 ──
   q('#amtIn')?.addEventListener('input', e => { state.amount = e.target.value; });
-  qAll('.pct-btn').forEach(b => b.addEventListener('click', () => {
+  qAll('.pct-btn').forEach(b => b.addEventListener('click', async () => {
+    const context = currentContext();
     const pct = parseInt(b.dataset.pct);
+    if (state.marketType === 'perp' && state.reduceOnly) {
+      try {
+        const positions = await sendMsg('getPositions', { symbol: state.symbol, marketType: 'perp' });
+        if (context !== currentContext()) return;
+        state.positions = positions;
+      } catch (e) { toast(e.message, 'error'); return; }
+    }
     const amt = calcPctAmount(pct);
     if (amt) { state.amount = amt; render(); }
     else toast(t('msg_fill_price'), 'error');
@@ -636,7 +727,7 @@ function bind() {
   q('#reduceOnlyChk')?.addEventListener('change', e => { state.reduceOnly = e.target.checked; });
 
   // ── 下单 / 确认 ──
-  q('#submitBtn')?.addEventListener('click', submitOrder);
+  q('#submitBtn')?.addEventListener('click', () => submitOrder());
   q('#confirmYes')?.addEventListener('click', () => { submitOrder(true); });
   q('#confirmNo')?.addEventListener('click',  () => { state.confirmPending = false; render(); });
 
@@ -653,7 +744,7 @@ function bind() {
   });
 
   qAll('.cancel-btn').forEach(b => b.addEventListener('click', () => {
-    doCancelOrder(b.dataset.oid, b.dataset.sym, b.dataset.isAlgo === '1');
+    doCancelOrder(b.dataset.oid, b.dataset.sym, b.dataset.isAlgo === '1', b.dataset.cancelKind, b.dataset.planType);
   }));
 }
 
@@ -671,7 +762,8 @@ function ordersPanel() {
     <button class="btn-refresh" id="refreshBtn">↻</button>
   </div>
   ${state.loading ? `<div class="loading">${t('loading')}</div>` : ''}
-  ${showPos ? positionsList() : ordersList()}
+  ${state.ordersWarning && !showPos ? `<div class="confirm-box">${escapeHtml(state.ordersWarning)}</div>` : ''}
+  ${state.ordersError ? `<div class="empty">${escapeHtml(state.ordersError)}</div>` : (showPos ? positionsList() : ordersList())}
 </div>`;
 }
 
@@ -701,16 +793,16 @@ function orderCard(o) {
   return `
 <div class="order-item">
   <div class="order-header">
-    <span class="order-symbol">${o.symbol || '-'}</span>
+    <span class="order-symbol">${escapeHtml(o.symbol || '-')}</span>
     <span class="order-side ${o.side}">${sideLabel}</span>
     <span class="order-type">${typeLabel}</span>
   </div>
   <div class="order-details">
-    <span>${o.amount || '-'} ${o.price ? '@ ' + o.price : ''} ${timeStr}</span>
+    <span>${escapeHtml(o.amount || '-')} ${o.price ? '@ ' + escapeHtml(o.price) : ''} ${o.stopPrice ? escapeHtml(t('label_trigger_price')) + ': ' + escapeHtml(o.stopPrice) : ''} ${timeStr}</span>
     <span class="status-${o.status}">${statusLabel}</span>
   </div>
   ${state.ordersTab === 'open' ? `
-  <button class="cancel-btn" data-oid="${o.id}" data-sym="${o.symbol}" data-is-algo="${o.isAlgo?'1':'0'}">${t('btn_cancel_order')}</button>` : ''}
+  <button class="cancel-btn" data-oid="${escapeHtml(o.id)}" data-sym="${escapeHtml(o.symbol)}" data-is-algo="${o.isAlgo?'1':'0'}" data-cancel-kind="${escapeHtml(o.cancelKind)}" data-plan-type="${escapeHtml(o.planType)}">${t('btn_cancel_order')}</button>` : ''}
 </div>`;
 }
 
@@ -721,13 +813,13 @@ function positionCard(p) {
   return `
 <div class="position-item">
   <div class="pos-header">
-    <span class="pos-symbol">${p.symbol}</span>
+    <span class="pos-symbol">${escapeHtml(p.symbol)}</span>
     <span class="pos-side ${p.side}">${sideLabel}</span>
     ${p.leverage ? `<span class="pos-leverage">${p.leverage}x</span>` : ''}
     ${p.marginType ? `<span class="pos-margin-type">${p.marginType}</span>` : ''}
   </div>
   <div class="pos-grid">
-    <div class="pos-row"><span>${t('pos_contracts')}</span><span>${p.contracts}</span></div>
+    <div class="pos-row"><span>${t('pos_contracts')}</span><span>${escapeHtml(p.amount ?? p.contracts)} ${escapeHtml(p.base || '')}</span></div>
     <div class="pos-row"><span>${t('pos_entry')}</span><span>${p.entryPrice || '-'}</span></div>
     <div class="pos-row"><span>${t('pos_mark')}</span><span>${p.markPrice || '-'}</span></div>
     <div class="pos-row"><span>${t('pos_pnl')}</span><span class="${pnlClass}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}</span></div>
@@ -737,115 +829,156 @@ function positionCard(p) {
 }
 
 // ─── API 调用 ─────────────────────────────────────────────────────────────────
-async function getCredentials() {
-  const key = `credentials_${state.exchange}`;
+async function getCredentials(exchange) {
+  const key = `credentials_${exchange}`;
   const s = await chrome.storage.local.get(key);
   return s[key] || null;
 }
 
-function sendMsg(action, params) {
-  return new Promise(async (resolve, reject) => {
-    const creds = await getCredentials();
-    if (!creds && !PUBLIC_ACTIONS.has(action)) {
-      return reject(new Error(t('msg_need_api', { exchange: EX_LABEL[state.exchange] })));
-    }
+async function sendMsg(action, params, exchange = state.exchange) {
+  const creds = PUBLIC_ACTIONS.has(action) ? null : await getCredentials(exchange);
+  if (!creds && !PUBLIC_ACTIONS.has(action)) {
+    throw new Error(t('msg_need_api', { exchange: EX_LABEL[exchange] }));
+  }
+  return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
-      { action, exchange: state.exchange, credentials: creds, params },
+      { action, exchange, credentials: creds, params },
       res => {
-        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-        res.ok ? resolve(res.data) : reject(new Error(res.error));
+        if (chrome.runtime.lastError || !res) {
+          const error = new Error(chrome.runtime.lastError?.message || '插件未返回结果，请先核对交易所订单后重试');
+          error.code = 'TRANSPORT_ERROR'; return reject(error);
+        }
+        if (res.ok) return resolve(res.data);
+        const error = new Error(res.error); error.code = res.code; reject(error);
       }
     );
   });
 }
 
 async function submitOrder(confirmed = false) {
-  if (!state.amount)    return toast(t('msg_enter_amount'), 'error');
-  if (state.orderType === 'limit' && !state.price) return toast(t('msg_enter_price'), 'error');
-  if ((state.orderType === 'stop' || state.orderType === 'takeprofit') && !state.stopPrice)
+  if (state.submitting || state.uncertainOrders.length) return;
+  if (!Number.isFinite(Number(state.amount)) || Number(state.amount) <= 0) return toast(t('msg_enter_amount'), 'error');
+  if (state.orderType === 'limit' && !(Number(state.price) > 0)) return toast(t('msg_enter_price'), 'error');
+  if ((state.orderType === 'stop' || state.orderType === 'takeprofit') && !(Number(state.stopPrice) > 0))
     return toast(t('msg_enter_trigger'), 'error');
 
-  if (state.orderType === 'market' && !confirmed) {
-    state.confirmPending = true; render(); return;
+  const exchange = state.exchange;
+  const context = currentContext();
+  const params = {
+    symbol: state.symbol, side: state.side, orderType: state.orderType, amount: state.amount,
+    price: state.price, stopPrice: state.stopPrice, marketType: state.marketType,
+    reduceOnly: state.reduceOnly, leverage: state.marketType === 'perp' ? state.leverage : undefined,
+  };
+  const signature = JSON.stringify({ exchange, ...params });
+  if (state.orderType === 'market' && (confirmed !== true || state.confirmOrder !== signature)) {
+    state.confirmPending = true; state.confirmOrder = signature; render(); return;
   }
-  state.confirmPending = false;
-  state.loading = true; render();
+  state.confirmPending = false; state.confirmOrder = null;
+  state.submitting = true; render();
+  params.requestId = crypto.randomUUID().replace(/-/g, '');
+  state.activeRequestId = params.requestId;
+  const record = { exchange, params, time: Date.now(), phase: 'queued' };
+  const pendingKey = `pendingTrade_${params.requestId}`;
+  let dispatched = false;
+  let accepted = false;
 
   try {
-    await sendMsg('placeOrder', {
-      symbol:     state.symbol,
-      side:       state.side,
-      orderType:  state.orderType,
-      amount:     state.amount,
-      price:      state.price,
-      stopPrice:  state.stopPrice,
-      marketType: state.marketType,
-      reduceOnly: state.reduceOnly,
-      leverage:   state.marketType === 'perp' ? state.leverage : undefined,
-    });
-    state.loading = false;
-    state.amount  = '';
-    toast(t('msg_order_success'), 'success');
+    await chrome.storage.local.set({ [pendingKey]: record });
+    dispatched = true;
+    await sendMsg('placeOrder', params, exchange);
+    accepted = true;
+    await chrome.storage.local.remove(pendingKey);
+    if (context === currentContext() && state.amount === params.amount) state.amount = '';
+    toast(`${EX_LABEL[exchange]} ${params.symbol}: ${t('msg_order_success')}`, 'success');
     silentLoadBalance();
   } catch (e) {
-    state.loading = false;
-    toast(e.message, 'error');
+    const uncertain = dispatched && (accepted || !['ORDER_REJECTED', 'REQUEST_REJECTED'].includes(e.code));
+    if (uncertain) state.uncertainOrders.push(record);
+    else {
+      try { await chrome.storage.local.remove(pendingKey); } catch (_) {}
+    }
+    toast(uncertain ? `${e.message}。订单结果未确认，请先核对交易所订单，勿直接重复提交。` : e.message, 'error');
+  } finally {
+    state.activeRequestId = null;
+    state.submitting = false; render();
   }
-  render();
 }
 
 async function loadOrders() {
-  state.loading = true; render();
+  const context = currentContext();
+  const tab = state.ordersTab;
+  const request = ++_ordersRequest;
+  state.loading = true; state.ordersError = null; state.ordersWarning = null; render();
   try {
-    const action = state.ordersTab === 'open' ? 'getOpenOrders' : 'getOrderHistory';
+    const action = tab === 'open' ? 'getOpenOrders' : 'getOrderHistory';
     const data = await sendMsg(action, { symbol: state.symbol, marketType: state.marketType });
-    state.orders = Array.isArray(data) ? data : (data?.list || data?.orders || []);
+    if (context !== currentContext() || tab !== state.ordersTab || request !== _ordersRequest) return;
+    state.orders = Array.isArray(data) ? data : (data?.orders || []);
+    state.ordersWarning = data?.warning || null;
   } catch (e) {
-    state.orders = []; toast(e.message, 'error');
+    if (context !== currentContext() || tab !== state.ordersTab || request !== _ordersRequest) return;
+    state.ordersError = e.message;
+  } finally {
+    if (context === currentContext() && tab === state.ordersTab && request === _ordersRequest) {
+      state.loading = false; render();
+    }
   }
-  state.loading = false; render();
 }
 
 async function loadPositions() {
-  state.loading = true; render();
+  const context = currentContext();
+  const request = ++_positionsRequest;
+  state.loading = true; state.ordersError = null; render();
   try {
-    const data = await sendMsg('getPositions', { marketType: 'perp' });
+    const data = await sendMsg('getPositions', { symbol: state.symbol, marketType: 'perp' });
+    if (context !== currentContext() || state.ordersTab !== 'positions' || request !== _positionsRequest) return;
     state.positions = Array.isArray(data) ? data : [];
   } catch (e) {
-    state.positions = []; toast(e.message, 'error');
+    if (context !== currentContext() || state.ordersTab !== 'positions' || request !== _positionsRequest) return;
+    state.ordersError = e.message;
+  } finally {
+    if (context === currentContext() && state.ordersTab === 'positions' && request === _positionsRequest) { state.loading = false; render(); }
   }
-  state.loading = false; render();
 }
 
-async function doCancelOrder(orderId, symbol, isAlgo) {
+async function doCancelOrder(orderId, symbol, isAlgo, cancelKind, planType) {
+  const context = currentContext();
   try {
-    await sendMsg('cancelOrder', { symbol: symbol || state.symbol, orderId, isAlgo, marketType: state.marketType });
+    await sendMsg('cancelOrder', { symbol: symbol || state.symbol, orderId, isAlgo, cancelKind, planType, marketType: state.marketType });
+    if (context !== currentContext()) return;
     toast(t('msg_cancel_success'), 'success');
     loadOrders();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { if (context === currentContext()) toast(e.message, 'error'); }
 }
 
 async function silentLoadBalance() {
+  const context = currentContext();
+  const request = ++_balanceRequest;
   try {
-    const data = await sendMsg('getBalance', { marketType: state.marketType });
-    state.balance = Array.isArray(data) ? data : (data ? [data] : null);
-    render();
-  } catch (_) { state.balance = null; }
+    const data = await sendMsg('getBalance', { symbol: state.symbol, marketType: state.marketType });
+    if (context !== currentContext() || request !== _balanceRequest) return;
+    state.balance = Array.isArray(data) ? data : null;
+  } catch (_) {
+    if (context !== currentContext() || request !== _balanceRequest) return;
+    state.balance = null;
+  }
+  render();
 }
 
 async function silentLoadMarkets(forceReload = false) {
   const requestedExchange = state.exchange;
   const requestedMarketType = state.marketType;
+  const request = ++_marketsRequest;
   state.marketsLoading = true;
   if (state.symModalOpen) refreshSymModal(); // 弹窗内显示「加载中」
   else render();
   try {
     const data = await sendMsg('getMarkets', { marketType: state.marketType, forceReload });
-    if (state.exchange !== requestedExchange || state.marketType !== requestedMarketType) return false;
+    if (state.exchange !== requestedExchange || state.marketType !== requestedMarketType || request !== _marketsRequest) return false;
     state.markets = Array.isArray(data) ? data : [];
     syncSymbolToLoadedMarkets();
   } catch (_) {
-    if (state.exchange !== requestedExchange || state.marketType !== requestedMarketType) return false;
+    if (state.exchange !== requestedExchange || state.marketType !== requestedMarketType || request !== _marketsRequest) return false;
     state.markets = [];
   }
   state.marketsLoading = false;
@@ -856,7 +989,8 @@ async function silentLoadMarkets(forceReload = false) {
 
 async function reloadMarketsThenTicker(forceReload = false) {
   const ok = await silentLoadMarkets(forceReload);
-  if (ok) startTickerRefresh();
+  if (ok) { startTickerRefresh(); silentLoadBalance(); }
+  return ok;
 }
 
 function syncSymbolToLoadedMarkets() {
@@ -880,11 +1014,21 @@ function syncSymbolToLoadedMarkets() {
 }
 
 async function silentLoadTicker() {
+  const context = currentContext();
+  if (_tickerPending === context) return;
+  _tickerPending = context;
+  const request = ++_tickerRequest;
   try {
     const data = await sendMsg('getTicker', { symbol: state.symbol, marketType: state.marketType });
+    if (context !== currentContext() || request !== _tickerRequest) return;
     state.ticker = data;
-    render();
-  } catch (_) { state.ticker = null; }
+  } catch (_) {
+    if (context !== currentContext() || request !== _tickerRequest) return;
+    state.ticker = null;
+  } finally {
+    if (_tickerPending === context) _tickerPending = null;
+  }
+  render();
 }
 
 // ─── 辅助函数 ─────────────────────────────────────────────────────────────────
@@ -907,7 +1051,7 @@ function fmtPrice(n) {
 }
 function estimateTotal() {
   const amt = parseFloat(state.amount) || 0;
-  const px  = parseFloat(state.price)  || state.ticker?.last || 0;
+  const px  = parseFloat(state.price) || (['stop', 'takeprofit'].includes(state.orderType) ? Number(state.stopPrice) : 0) || state.ticker?.last || 0;
   if (state.orderType === 'market') {
     if (!amt || !state.ticker?.last) return t('market_price_label');
     return `≈ ${(amt * state.ticker.last).toFixed(2)} ${quoteCcy()}`;
@@ -921,25 +1065,29 @@ function getAvail(currency) {
   for (const b of list) {
     const ccy = b.asset || b.ccy || b.currency || b.coin || '';
     if (ccy.toUpperCase() === currency.toUpperCase()) {
-      const v = parseFloat(b.free || b.available || b.walletBalance || 0);
-      return v.toFixed(4);
+      const v = Number(b.free ?? b.available ?? b.walletBalance ?? 0);
+      return Number.isFinite(v) && v > 0 ? String(v) : '0';
     }
   }
   return '0';
 }
 function calcPctAmount(pct) {
-  const base  = baseCcy();
-  const quote = quoteCcy();
-  if (state.side === 'sell') {
-    const avail = parseFloat(getAvail(base));
-    if (!avail) return '';
-    return String((avail * pct / 100).toFixed(6));
-  } else {
-    const px = parseFloat(state.price) || state.ticker?.last;
-    const avail = parseFloat(getAvail(quote));
-    if (!px || !avail) return '';
-    return String((avail * pct / 100 / px).toFixed(6));
+  const base = baseCcy(), quote = quoteCcy();
+  if (state.marketType === 'perp' && state.reduceOnly) {
+    const side = state.side === 'sell' ? 'long' : 'short';
+    const available = state.positions.filter(p => p.symbol === state.symbol && p.side === side)
+      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    return available > 0 ? String(available * pct / 100) : '';
   }
+  if (state.side === 'sell' && state.marketType !== 'perp') {
+    const available = Number(getAvail(base));
+    return available > 0 ? String(available * pct / 100) : '';
+  }
+  const px = state.orderType === 'market' ? state.ticker?.last : (Number(state.price) || (['stop', 'takeprofit'].includes(state.orderType) ? Number(state.stopPrice) : 0) || state.ticker?.last);
+  const available = Number(getAvail(quote));
+  if (!(px > 0) || !available) return '';
+  const leverage = state.marketType === 'perp' ? state.leverage : 1;
+  return String(available * pct / 100 * leverage / px * .995);
 }
 function submitLabel() {
   const typeKey = { market: 'type_market', limit: 'type_limit', stop: 'type_stop', takeprofit: 'type_takeprofit' };

@@ -2,7 +2,7 @@
 
 > 专为加密货币交易者设计的 Chrome 侧边栏插件，支持五大主流交易所的快捷下单、实时行情、订单管理和持仓查看。
 
-![版本](https://img.shields.io/badge/版本-1.0.1-blue) ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green) ![ccxt](https://img.shields.io/badge/ccxt-4.x-orange)
+![版本](https://img.shields.io/badge/版本-1.0.3-blue) ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green) ![ccxt](https://img.shields.io/badge/ccxt-4.x-orange)
 
 ---
 
@@ -11,21 +11,45 @@
 | 功能 | 说明 |
 |------|------|
 | **Side Panel 侧边栏** | 固定在浏览器右侧，全高显示，不遮挡页面 |
-| **实时行情** | 每 3 秒自动刷新当前交易对最新价、涨跌幅、买卖价 |
+| **实时行情** | 每 3 秒自动刷新当前交易对最新价、涨跌幅、买卖价，丢弃已切换交易对的旧响应 |
 | **市价单** | 二次确认后立即以市场价成交 |
 | **限价单** | 指定价格挂单，等待市场到达 |
 | **止损单** | 设置触发价，到达后自动执行（市价/限价） |
 | **止盈单** | 设置触发价，到达后自动止盈 |
 | **交易对搜索** | 输入关键词实时过滤，快速切换币种 |
 | **比例快速填量** | 25% / 50% / 75% / 100% 余额一键填入数量 |
-| **挂单查询** | 查看当前所有未成交订单，支持一键撤单 |
-| **历史订单** | 查看最近 50 条成交/撤销记录 |
-| **合约持仓** | 查看持仓量、开仓价、标记价、未实现盈亏、强平价 |
+| **挂单查询** | 分页查询当前交易对的普通及条件挂单，支持一键撤单；读取上限和查询失败明确提示 |
+| **历史订单** | 查看当前交易对最近 50 条成交/撤销记录 |
+| **合约持仓** | 查看当前交易对的持仓量（基础币）、开仓价、标记价、未实现盈亏、强平价 |
 | **只减仓** | 合约下单支持 Reduce-only 模式 |
 | **账户余额** | 实时显示各币种可用余额，30 秒自动刷新 |
 | **Coinank 联动** | 在 coinank.com 浏览时自动同步当前交易对到侧边栏 |
 
 ---
+
+## v1.0.3 更新
+
+- 下单与解除未确认限制共用交易所级锁，锁覆盖本地记录读写及完整下单过程；解除过程中不能进入新的提交，已解除的待提交意图也不能继续发单。
+- 区分待提交、正在提交、结果未知三种状态，避免两个窗口同时提交时互相误判；同一请求去重，订单确认成功或明确拒绝后由后台清理记录，结果未知时持久保留，侧边栏关闭或后台重启后仍能恢复保护。
+- 多条未确认记录按顺序解除，完成后重新读取本地状态，保留其它窗口新产生的未确认订单。
+- Bitget 永续计划单撤单直接校验目标订单的 `successList` / `failureList` 业务结果，不再把 HTTP 成功误当作撤单成功；补齐 `moving_plan` 类型，并拒绝未知计划单类型。
+- 增加反向解锁竞态、后台重启、并发提交、本地存储失败和撤单业务失败回归，覆盖列表到撤单的完整类型传递。
+- Release 包：`release/coinank-trader-v1.0.3.zip`。此前 v1.0.2 候选包已被本版本替代，不应继续分发。
+
+## v1.0.2 更新
+
+- 修复市价确认绕过、切换 Tab 后重复下单、旧行情/余额/订单覆盖新交易上下文。
+- 界面数量统一以基础币表示；线性永续下单时按 `contractSize` 转换成张数，并向下处理数量精度。精度归零时在设置杠杆和下单前拒绝，防止 Hyperliquid 零数量只减仓单造成整仓平仓。
+- 当前合约支持范围为 **USDT/USDC 结算的线性永续**；币本位、反向及其他结算产品不展示，并由后台再次拒绝。
+- 修复 Binance Algo、Bybit 现货 TP/SL、Bitget 计划单查询和撤单路由；普通父订单的预设止盈止损不会再被误认为计划单。条件单查询失败会明确显示错误。
+- Bitget 止损/止盈统一使用有明确数量的触发委托（`normal_plan`），支持触发后市价/限价；以最新成交价校验触发方向，避免使用整仓止盈止损接口。触发依据为成交价。
+- 修复 Bitget 现货市价买入的 quote cost 参数。现货市价买入按参考价换算花费金额，实际收到的基础币数量会随成交价及手续费变化。
+- 识别 Binance、OKX、Bybit、Bitget 的单向/双向持仓模式；只减仓会发送对应持仓方向。保留现有 OKX / Hyperliquid 持仓的全仓/逐仓模式，Bitget 使用账户当前模式；无法确认模式时拒绝下单。OKX / Hyperliquid 无持仓时采用全仓。
+- Bybit 所选杠杆已经一致（`110043`）时继续下单，其他杠杆错误仍阻断。
+- 下单使用独立锁和客户端委托标识。结果未确认的订单会保存在本地；重新打开插件后仍须核对交易所挂单、成交和持仓，再解除下单限制。不会自动重试下单。
+- 修复 Passphrase 缓存、余额舍入参与计算、市价比例填量引用旧限价和数字币名页面联动。
+- Chrome 最低版本为 120；固定 CCXT npm 依赖版本，回归测试直接执行随包浏览器版本。
+- Release 包：`release/coinank-trader-v1.0.2.zip`
 
 ## v1.0.1 更新
 
@@ -40,7 +64,7 @@
 
 ## 支持交易所
 
-| 交易所 | 现货 | 永续合约 | 止损单 | 止盈单 | 备注 |
+| 交易所 | 现货 | 线性永续合约 | 止损单 | 止盈单 | 备注 |
 |--------|------|----------|--------|--------|------|
 | **Binance** | ✅ | ✅ | ✅ | ✅ | 需开启期货权限 |
 | **OKX** | ✅ | ✅ | ✅ | ✅ | 止损/止盈走算法单接口 |
@@ -54,18 +78,20 @@
 
 ### 方式一：直接下载（推荐）
 
-1. 前往 [Releases](https://github.com/coinank/ank-trade/releases) 下载最新的 `coinank-trader-vX.X.X.zip`（当前版本：`coinank-trader-v1.0.1.zip`）
+1. 前往 [Releases](https://github.com/coinank/ank-trade/releases) 下载最新的 `coinank-trader-vX.X.X.zip`（当前版本：`coinank-trader-v1.0.3.zip`）
 2. 解压 zip 文件
 3. 打开 Chrome，访问 `chrome://extensions`
 4. 右上角开启 **开发者模式**
-5. 点击 **加载已解压的扩展程序**，选择解压后的 `extension/` 目录
+5. 点击 **加载已解压的扩展程序**，选择解压后直接包含 `manifest.json` 的目录
 
 ### 方式二：从源码构建
+
+需要 Node.js 20.19+、Chrome 120+；生成 ZIP 还需要系统 `zip` 命令。
 
 ```bash
 git clone https://github.com/coinank/ank-trade.git
 cd ank-trade
-npm install
+npm ci
 npm run build
 ```
 
@@ -141,7 +167,7 @@ Hyperliquid 使用 **API 钱包**机制，与其他交易所不同：
 切换到 **订单** Tab：
 - **挂单**：查看所有未成交订单，支持一键撤单
 - **历史**：查看最近成交/撤销记录
-- **持仓**（合约模式）：查看当前持仓的开仓价、标记价、未实现盈亏、强平价等
+- **持仓**（合约模式）：查看当前交易对的开仓价、标记价、未实现盈亏、强平价等；切换交易对后查询对应结算市场。
 
 ### Coinank 联动
 
@@ -187,15 +213,16 @@ background.js → chrome.storage.local → sidepanel.html 自动同步
 |--------|----------|----------|
 | Binance | `stopLossPrice` 参数 → `STOP_MARKET` / `STOP_LOSS_LIMIT` | `takeProfitPrice` 参数 |
 | OKX | `/order-algo` 算法单，`stopLossPrice` | `/order-algo`，`takeProfitPrice` |
-| Bybit | `stopLossPrice` 参数 | `takeProfitPrice` 参数 |
-| Bitget | 合约使用 `stopLossPrice`；现货触发单使用 `triggerPrice` | 合约使用 `takeProfitPrice`；现货触发单使用 `triggerPrice` |
+| Bybit | `triggerPrice` + 明确触发方向；现货 `tpslOrder` | `triggerPrice` + 明确触发方向；现货 `tpslOrder` |
+| Bitget | `triggerPrice`（`fill_price`），合约走指定数量的 `normal_plan` | `triggerPrice`（`fill_price`），校验止盈触发方向 |
 | Hyperliquid | `stopLossPrice` → trigger 结构 | `takeProfitPrice` → trigger 结构 |
 
 **交易安全保护**
 
 - `background.js` 是插件的交易执行层，所有下单请求都会在这里再次校验交易对类型，不依赖 UI 状态作为唯一保护。
+- 合约只允许 USDT/USDC 线性永续；所有输入在私有写操作前完成精度及有效性检查。
 - 若 `marketType=perp` 但传入现货 symbol（如 `BTC/USDT`），或 `marketType=spot` 但传入合约 symbol（如 `BTC/USDT:USDT`），请求会被拒绝。
-- 合约杠杆设置失败时不会继续下单，避免实际杠杆与用户选择不一致。
+- 合约杠杆设置失败时不会继续下单，避免实际杠杆与用户选择不一致；Bybit 明确返回“杠杆已一致”时继续执行。
 - CCXT 内置限频已启用，减少连续查询 / 下单触发交易所限频的风险。
 
 ---
@@ -208,6 +235,15 @@ npm run dev
 
 # 单次构建
 npm run build
+
+# 离线回归（不使用凭据、不发送真实订单）
+npm test
+
+# 构建、回归通过后生成版本 ZIP
+npm run release
+
+# 用实际构建包验证五家公开市场/行情（联网、不使用凭据）
+npm run smoke:public
 ```
 
 修改代码后，在 `chrome://extensions` 页面点击插件卡片上的**刷新按钮**，使 Service Worker 加载最新代码。

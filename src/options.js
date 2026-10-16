@@ -11,6 +11,7 @@ const EXCHANGES = [
 const state = {
   cur:      'binance',
   creds:    {},   // { [exchangeId]: { apiKey, secret, passphrase? } }
+  drafts:   {},
   saving:   false,
   testing:  false,
   msg:      null,  // { text, type }
@@ -35,7 +36,7 @@ function render() {
 
 function html() {
   const ex    = EXCHANGES.find(e => e.id === state.cur);
-  const creds = state.creds[state.cur] || {};
+  const creds = state.drafts[state.cur] || state.creds[state.cur] || {};
   return `
 <div class="options-wrap">
   <header class="options-header">
@@ -71,14 +72,14 @@ function html() {
     <div class="field-group">
       <label>${ex.isEth ? t('label_wallet') : t('label_api_key')}</label>
       <input class="field-input" id="apiKeyIn" type="text"
-             value="${creds.apiKey || ''}"
+             value="${escapeHtml(creds.apiKey)}"
              placeholder="${ex.isEth ? t('ph_wallet') : t('ph_api_key')}" autocomplete="off">
     </div>
 
     <div class="field-group">
       <label>${ex.isEth ? t('label_private_key') : t('label_secret_key')}</label>
       <input class="field-input" id="secretIn" type="password"
-             value="${creds.secret || ''}"
+             value="${escapeHtml(creds.secret)}"
              placeholder="${ex.isEth ? t('ph_private_key') : t('ph_secret_key')}" autocomplete="off">
     </div>
 
@@ -86,7 +87,7 @@ function html() {
     <div class="field-group">
       <label>Passphrase</label>
       <input class="field-input" id="passIn" type="password"
-             value="${creds.passphrase || ''}" placeholder="${t('ph_passphrase')}" autocomplete="off">
+             value="${escapeHtml(creds.passphrase)}" placeholder="${t('ph_passphrase')}" autocomplete="off">
     </div>` : ''}
 
     <div class="actions">
@@ -99,7 +100,7 @@ function html() {
       <button class="btn-danger" id="clearBtn">${t('btn_clear')}</button>
     </div>
 
-    ${state.msg ? `<div class="msg ${state.msg.type}">${state.msg.text}</div>` : ''}
+    ${state.msg ? `<div class="msg ${state.msg.type}">${escapeHtml(state.msg.text)}</div>` : ''}
   </div>
 
   <div class="security-note">
@@ -110,6 +111,7 @@ function html() {
 }
 
 function bind() {
+  ['apiKeyIn', 'secretIn', 'passIn'].forEach(id => document.getElementById(id)?.addEventListener('input', captureDraft));
   document.querySelectorAll('[data-ex]').forEach(b => b.addEventListener('click', () => {
     state.cur = b.dataset.ex;
     chrome.storage.local.set({ selectedExchange: state.cur });
@@ -124,7 +126,20 @@ function bind() {
   });
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function captureDraft() {
+  state.drafts[state.cur] = {
+    apiKey: document.getElementById('apiKeyIn')?.value || '',
+    secret: document.getElementById('secretIn')?.value || '',
+    passphrase: document.getElementById('passIn')?.value || '',
+  };
+}
+
 async function doSave() {
+  captureDraft();
   const apiKey     = document.getElementById('apiKeyIn')?.value?.trim();
   const secret     = document.getElementById('secretIn')?.value?.trim();
   const passphrase = document.getElementById('passIn')?.value?.trim();
@@ -132,18 +147,25 @@ async function doSave() {
   const ex = EXCHANGES.find(e => e.id === state.cur);
   if (ex.hasPass && !passphrase) return showMsg(t('msg_need_pass'), 'error');
 
+  const exchange = state.cur;
   state.saving = true; render();
   const creds = { apiKey, secret };
   if (passphrase) creds.passphrase = passphrase;
 
-  state.creds[state.cur] = creds;
-  await chrome.storage.local.set({ [`credentials_${state.cur}`]: creds });
-  state.saving = false;
-  showMsg(t('msg_save_ok'), 'success');
-  render();
+  try {
+    await chrome.storage.local.set({ [`credentials_${exchange}`]: creds });
+    state.creds[exchange] = creds;
+    delete state.drafts[exchange];
+    showMsg(t('msg_save_ok'), 'success');
+  } catch (e) {
+    showMsg(e.message, 'error');
+  } finally {
+    state.saving = false; render();
+  }
 }
 
 async function doTest() {
+  captureDraft();
   const apiKey     = document.getElementById('apiKeyIn')?.value?.trim();
   const secret     = document.getElementById('secretIn')?.value?.trim();
   const passphrase = document.getElementById('passIn')?.value?.trim();
@@ -151,6 +173,7 @@ async function doTest() {
   const ex = EXCHANGES.find(e => e.id === state.cur);
   if (ex.hasPass && !passphrase) return showMsg(t('msg_need_pass_first'), 'error');
 
+  const exchange = state.cur;
   state.testing = true; render();
   const creds = { apiKey, secret };
   if (passphrase) creds.passphrase = passphrase;
@@ -158,10 +181,10 @@ async function doTest() {
   try {
     await new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(
-        { action: 'getBalance', exchange: state.cur, credentials: creds, params: {} },
+        { action: 'getBalance', exchange, credentials: creds, params: { marketType: exchange === 'hyperliquid' ? 'perp' : 'spot' } },
         res => {
           if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-          res.ok ? resolve(res.data) : reject(new Error(res.error));
+          res?.ok ? resolve(res.data) : reject(new Error(res?.error || '连接未返回结果'));
         }
       );
     });
@@ -176,6 +199,7 @@ async function doClear() {
   const ex = EXCHANGES.find(e => e.id === state.cur);
   if (!confirm(t('confirm_clear', { exchange: ex.name }))) return;
   delete state.creds[state.cur];
+  delete state.drafts[state.cur];
   await chrome.storage.local.remove(`credentials_${state.cur}`);
   showMsg(t('msg_cleared'), 'info');
   render();
